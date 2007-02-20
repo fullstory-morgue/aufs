@@ -23,3 +23,6 @@ install/aufs-source::
 	# Prepare the debian source tarball
 	tar jcf debian/aufs-source/usr/src/aufs.tar.bz2 \
 		-C debian/tmp modules
+
+#get-orig-source:
+	# XXX: help me!
