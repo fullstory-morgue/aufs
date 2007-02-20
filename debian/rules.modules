@@ -20,8 +20,8 @@ binary-modules: kdist_config
 	$(MAKE) -f local.mk $(kmod) KDIR=$(KSRC)
 	
 	# Install modules
-	dh_installdirs		lib/modules/$(KVERS)/kernel/fs/aufs/
-	dh_install $(kmod)	lib/modules/$(KVERS)/kernel/fs/aufs/
+	dh_installdirs			lib/modules/$(KVERS)/kernel/fs/aufs/
+	dh_install fs/aufs/$(kmod)	lib/modules/$(KVERS)/kernel/fs/aufs/
 	
 	dh_installdocs
 	dh_installchangelogs
