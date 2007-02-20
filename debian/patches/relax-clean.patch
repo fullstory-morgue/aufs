@@ -1,0 +1,14 @@
+diff -Nrup aufs-0.0~20070207.orig/local.mk aufs-0.0~20070207/local.mk
+--- aufs-0.0~20070207.orig/local.mk	2007-02-19 13:25:25.000000000 +1000
++++ aufs-0.0~20070207/local.mk	2007-02-20 22:22:04.000000000 +1000
+@@ -72,8 +72,8 @@ kconfig: fs/aufs/Kconfig
+ 
+ clean:
+ 	${MAKE} -C ${KDIR} M=${CURDIR}/fs/aufs $@
+-	${MAKE} -C util $@
+-	${RM} ${Tgt}
++	-${MAKE} -C util $@
++	-${RM} ${Tgt}
+ 	find . -type f \( -name '*~' -o -name '.#*[0-9]' \) | xargs -r ${RM}
+ 
+ util/%:
