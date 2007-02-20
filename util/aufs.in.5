@@ -1,0 +1,979 @@
+.\".so aufs.tmac
+.
+.TH aufs 5 \*[AUFS_VERSION] Linux "Linux Aufs User's Manual"
+.SH NAME
+aufs \- another unionfs. version \*[AUFS_VERSION]
+
+.\" ----------------------------------------------------------------------
+.SH DESCRIPTION
+Aufs is a stackable unification filesystem such as Unionfs, which unifies
+several directories and provides a merged single directory.
+In the early days, aufs was entirely re-designed and re-implemented
+Unionfs. After
+many original ideas, approaches and improvements, it
+becomes totally different from Unionfs while keeping the basic features.
+See Unionfs for the basic features.
+
+.\" ----------------------------------------------------------------------
+.SH MOUNT OPTIONS
+.TP
+.B br:BRANCH[:BRANCH ...] (dirs=BRANCH[:BRANCH ...])
+Adds new branches.
+(cf. Branch Syntax).
+.
+.TP
+.B [ add | ins ]:index:BRANCH
+Adds a new branch.
+The index begins with 0.
+
+If there is the same named file on the lower branch (larger index),
+aufs will hide the lower file.
+You can only see the highest file.
+You will be confused if the added branch has whiteouts (including
+diropq), they may or may not hide the lower entries.
+.\" It is recommended to make sure that the added branch has no whiteout.
+
+If a process have once mapped a file by mmap(2) with MAP_SHARED
+and the same named file exists on the lower branch,
+the process still refers the file on the lower(hidden)
+branch after adding the branch.
+If you want to update the contents of a process address space after
+adding, you need to restart your process or open/mmap the file again.
+.\" Usually, such files are executables or shared libraries.
+(cf. Branch Syntax).
+.
+.TP
+.B del:dir
+Removes a branch.
+
+If a process is referencing the file/directory on the deleting branch
+(by open, mmap, current working directory, etc.), aufs will return an
+error EBUSY.
+.
+.TP
+.B mod:BRANCH
+Modifies the permission flags of the branch.
+
+If the branch permission is been changing 'rw' to 'ro, and a process
+is mapping a file by mmap(2)
+.\" with MAP_SHARED
+on the branch, the process may or may not
+be able to modify its mapped memory region after modifying branch
+permission flags.
+(cf. Branch Syntax).
+.
+.TP
+.B append:BRANCH
+equivalent to add:(last index + 1):BRANCH.
+(cf. Branch Syntax).
+.
+.TP
+.B prepend:BRANCH
+equivalent to add:0:BRANCH.
+(cf. Branch Syntax).
+.
+.TP
+.B xino=filename
+Use external inode number table. It is set to
+<FirstWritableBranch>/\*[AUFS_XINO_FNAME] by default, or
+\*[AUFS_XINO_DEFPATH].
+Comma character in filename is not allowed.
+
+The file is created per branch filesystem, and unlinked. So you
+cannot find this file, but it exists and is read/written frequently by
+aufs.
+(cf. External Inode Number Table).
+.
+.TP
+.B noxino
+Stop using external inode number table.
+
+If you use this option,
+Some applications will not work correctly.
+.\" And pseudo link feature will not work after the inode cache is
+.\" shrunk.
+(cf. External Inode Number Table).
+.
+.TP
+.B dirwh=N
+Watermark to remove a dir actually at rmdir(2) and rename(2).
+
+If the target dir which is being removed or renamed (destination dir)
+has a huge number of whiteouts, i.e. the dir is empty logically but
+physically, the cost to remove/rename the single
+dir may be very high.
+It is
+required to unlink all of whiteouts internally before issuing
+rmdir/rename to the branch.
+To reduce the cost of single systemcall,
+aufs renames the target dir to a whiteout-ed temporary name and
+invokes a pre-created
+kernel thread to remove whiteout-ed children and the target dir.
+The rmdir/rename systemcall returns just after kicking the thread.
+
+When the number of whiteout-ed children is less than the value of
+dirwh, aufs remove them in a single systemcall instead of passing
+another thread.
+This value is ignored when the branch is NFS.
+The default value is \*[AUFS_DIRWH_DEF].
+.
+.TP
+.B plink noplink
+Specifies to use 'pseudo link' feature or not.
+The default is 'plink' which means use this feature.
+(cf. Pseudo Link)
+.
+.TP
+.B clean_plink
+Removes all pseudo-links in memory.
+In order to make pseudo-link permanent, use
+'auplink' script just before one of these operations,
+unmounting aufs,
+using 'ro' or 'noplink' mount option,
+deleting a branch from aufs,
+adding a branch into aufs,
+or changing your writable branch as readonly.
+If you installed both of /sbin/mount.aufs and /sbin/umount.aufs, and your
+mount(8) and umount(8) support them, and /etc/default/auplink is configured,
+'auplink' script will be executed automatically and flush pseudo-links.
+(cf. Pseudo Link)
+.
+.TP
+.B udba=none | reval | inotify
+Specifies the level of UDBA (User's Direct Branch Access) test.
+(cf. User's Direct Branch Access and Inotify Limitation).
+.
+.TP
+.B diropq=whiteouted | w | always | a
+Specifies whether mkdir(2) and rename(2) dir case make the created directory
+'opaque' or not.
+In other words, to create '\*[AUFS_WH_DIROPQ]' under the created or renamed
+directory, or not to create.
+When you specify diropq=w or =whiteouted, aufs will not create it if the
+directory was not whiteouted or opaqued. If the directory was whiteouted
+or opaqued, the created or renamed directory will be opaque.
+When you specify diropq=a or =always, aufs will always create it regardless
+the directory was whiteouted/opaqued or not.
+The default value is diropq=w, it means not to create when it is unnecessary.
+If you define CONFIG_AUFS_COMPAT at aufs compiling time, the default will be
+diropq=a.
+You need to consider this option if you are planning to add a branch later
+since 'diropq' affects the same named directory on the added branch.
+.
+.TP
+.B warn_perm nowarn_perm
+Enables or disables the warning about uid/gid/permission at adding a
+branch. The default is warn_perm (cf. DIAGNOSTICS).
+.\" .
+.\" .TP
+.\" .B coo=none | leaf | all
+.\" Specifies copyup-on-open level.
+.\" When you open a file which is on readonly branch, aufs opens the file after
+.\" copying-up it to the writable branch following this level.
+.\" When the keyword 'all' is specified, aufs copies-up the opening object even if
+.\" it is a directory. In this case, simple 'ls' or 'find' cause the copyup and
+.\" your writable branch will have a lot of empty directories.
+.\" When the keyword 'leaf' is specified, aufs copies-up the opening object except
+.\" directory.
+.\" The keyword 'none' disables copyup-on-open.
+.\" The default is 'coo=none'.
+.\" .
+.\" .TP
+.\" .B ipriv noipriv
+.\" When you define CONFIG_SECURITY and use any type of Linux Security Module
+.\" (LSM), for example SUSE AppArmor, you may or may not meet some errors or
+.\" warnings from your security module. Because aufs access its branches
+.\" internally, your security module may detect, report, or stop it.
+.\" The behaviour is highly depending upon your security module and its
+.\" configuration.
+.\" Linux kernel has a flag to address this situation. It is called S_PRIVATE flag
+.\" in inode. When this flag is set, LSM will stop calling the security modules on
+.\" the inode.
+.\" If CONFIG_SECURITY was enabled and ipriv mount option was specified,
+.\" aufs sets this flag when accessing its branches internally. Finishing the
+.\" operation, aufs reset this flag.
+.\" 
+.\" Currently, aufs does NOT use S_PRIVATE at mount and remount time. It is
+.\" recommended to be super-user when you mount or remount aufs and set your
+.\" LSM to ignore super-user.
+.\" 
+.\" The default is noipriv which means that aufs never set/reset S_PRIVATE flag.
+.\" 
+.\" Not all of kernel functions supports S_PRIVATE flag. For example, readdir(2)
+.\" and statfs(2) don't support it. So when your LSM supports these
+.\" operations and you use them from aufs, your LSM will be called
+.\" and do something.
+.\" Again, the behaviour is highly depending upon your security module and its
+.\" configuration.
+.\" 
+.\" Additionally, there are several problems in handling S_PRIVATE flag.
+.\" 
+.\" During S_PRIVATE flag is set by aufs, someone else might set S_PRIVATE flag.
+.\" In this case, aufs cannot detect it and will clear it unexpectedly.
+.\" 
+.\" During S_PRIVATE flag is set by aufs, the inode might be saved to disk.
+.\" In this case, aufs tries detecting the inode was saved and making the inode
+.\" dirty again. But it never guarantee that the inode will be saved again.
+.\" When the system crashes before aufs resets S_PRIVATE flag and after the inode
+.\" was saved, users should repair the unexpectedly saved S_PRIVATE flag manually
+.\" after reboot.
+
+.\" ----------------------------------------------------------------------
+.SH Module parameters
+.TP
+.B nwkq=N
+The number of kernel thread named \*[AUFS_WKQ_NAME].
+
+Those threads stay in the system while the aufs module is loaded,
+and handle the special I/O requests from aufs.
+The default value is \*[AUFS_NWKQ_DEF].
+
+The special I/O requests from aufs include a part of copy-up, lookup,
+directory handling, pseudo-link and xino file operations.
+For example, Unix filesystems allow you to rmdir(2) which has no write
+permission bit, if its parent directory has write permission bit. In aufs, the
+removing direcoty may or may not have whiteout or 'dir opaque' mark as its
+child. And aufs needs to unlink(2) them before rmdir(2).
+Therefore aufs delegates the actual unlink(2) and rmdir(2) to another kernel
+thread which has been created already and has a superuser privilege.
+
+.\" ----------------------------------------------------------------------
+.SH Branch Syntax
+dir_path[=rw|[=ro[+wh]]]
+
+dir_path is a directory path.
+The keyword after 'dir_path=' is a
+permission flags for that branch.
+Comma, colon and the permission flags string (including '=')in the path
+are not allowed.
+Any filesystem can be a branch, but aufs and unionfs.
+If you specify aufs or unionfs as a branch, aufs will return an error
+saying it is overlapped or nested.
+
+The maximum number of branches is configurable at compile time.
+The current value is \*[AUFS_BRANCH_MAX].
+.
+.TP
+.B rw
+Readable and writable branch. Set as default for the first branch.
+If the branch filesystem is mounted as readonly, you cannot set it 'rw'.
+.
+.TP
+.B ro
+Readonly branch and it has no whiteouts on it.
+Set as default for all branches except the first one. Aufs never issue
+write operation, and lookup operation for whiteout to this branch.
+.
+.TP
+.B ro+wh
+Readonly branch and it has/might have whiteouts on it.
+Aufs never issue write operation to this branch, but lookup for whiteout.
+
+.\" ----------------------------------------------------------------------
+.SH External Inode Number Table (xino)
+Aufs uses an external inode number table (xino) file per a branch
+filesystem by
+default. It is a table for converting an inode number on a branch to
+an aufs inode number. The default path is "first writable
+branch"/\*[AUFS_XINO_FNAME]. If there is no writable branch, the
+default path
+will be \*[AUFS_XINO_DEFPATH].
+A user who executes mount(8) needs the privilege to create xino
+file.
+
+Those files are always opened and read/write by aufs frequently. The
+maximum file size will be 'max inode number on the branch x size of an
+inode number'. For example, on a 32bit system,
+
+.nf
+$ df -i /branch_fs
+/dev/hda14           2599968  203127 2396841    8% /branch_fs
+.fi
+
+and /branch_fs is an branch of the aufs, the maximum xino file size for
+/branch_fs will be 2,599,968 x 4 bytes = about 10 MB. But it might not be
+allocated all of disk blocks.
+
+The xino files are always hidden, i.e. removed. So you cannot do 'ls -l
+xino_file'. Instead, you can check it through /proc/fs/aufs/xino. (not
+implemented).
+Once you unmount aufs, the xino files for that aufs are totally gone.
+It means that the inode number is not permanent.
+
+The xino files should be created on the filesystem except NFS.
+If your first writable branch is NFS, you will need to specify xino
+file path other than NFS.
+Also if you are going to remove the branch where xino files exist or
+change the branch permission to readonly, you need to use xino option
+before del/mod the branch.
+
+If you do not want to use xino, use noxino mount option. Use this
+option with care, since the inode number may be changed silently and
+unexpectedly anytime.
+For example,
+rmdir failure, recursive chmod/chown/etc to a large and deep directory
+or anything else.
+And some applications will not work correctly.
+.\" When the inode number has been changed, your system
+.\" can be crazy.
+If you want to change the xino default path, use xino mount option.
+
+After you add branches, the persistence of inode number is not
+guaranteed.
+At remount time, cached but unused inodes are discarded.
+And the newly appeared inode may have different inode number at the
+next access time. The inodes in use have the persistent inode number.
+
+When aufs assigned an inode number to a file, and if you create the
+same named file on the upper branch directly, then the next time you
+access the file, aufs may assign another inode number to the file even
+if you use xino option.
+Some applications may treat the file whose inode number has been
+changed as totally different file.
+
+.\" ----------------------------------------------------------------------
+.SH Pseudo Link (hardlink over branches)
+Aufs supports 'pseudo link' which is a logical hard-link over
+branches (cf. ln(1) and link(2)).
+In other words, a copied-up file by link(2) and a copied-up file which was
+hard-linked on a readonly branch filesystem.
+
+When you have files named fileA and fileB which are
+hardlinked on a readonly branch, if you write something into fileA,
+aufs copies-up fileA to a writable branch, and write(2) the originally
+requested thing to the copied-up fileA. On the writable branch,
+fileA is not hardlinked.
+But aufs remembers it was hardlinked, and handles fileB as if it existed
+on the writable branch, by referencing  fileA's inode on the writable
+branch as fileB's inode.
+
+Once you unmount aufs, the plink info for that aufs kept in memory are totally
+gone.
+It means that the pseudo-link is not permanent.
+If you want to make plink permanent, try 'auplink' script just before
+one of these operations,
+unmounting your aufs,
+using 'ro' or 'noplink' mount option,
+deleting a branch from aufs,
+adding a branch into aufs,
+or changing your writable branch to readonly.
+This script will reproduces all real hardlinks on a writable branch by linking
+them, and removes pseudo-link info in memory and temporary link on the
+writable branch.
+Since this script access your branches directly, you cannot hide them by
+'mount --bind /tmp /branch' or something.
+If you are willing to rebuild your aufs with the same branches later, you
+should use auplink script before you umount your aufs.
+If you installed both of /sbin/mount.aufs and /sbin/umount.aufs, and your
+mount(8) and umount(8) support them, and /etc/default/auplink is configured,
+'auplink' script will be executed automatically and flush pseudo-links.
+/etc/default/auplink is a simple shell script which does nothing but defines
+$FLUSH. If your aufs mount point is set in $FLUSH, 'auplink' flushes
+the pseudo-links on that mount point.
+If $FLUSH is set to "ALL", 'auplink' will be executed for every aufs.
+The 'auplink' script uses 'aulchown' binary, you need to install it too.
+The 'auplink' script executes 'find' and 'mount -o remount', they may take a
+long time and impact the later system performance.
+If you didn't install /sbin/mount.aufs, /sbin/umount.aufs or /sbin/auplink,
+but you want to flush pseudo-links, then you need to execute 'auplink' manually.
+If you installed and configured them, but do not want to execute 'auplink' at
+umount time, then use '-i' option for umount(8).
+
+.nf
+# auplink /your/aufs/root flush
+# umount /your/aufs/root
+or
+# auplink /your/aufs/root flush
+# mount -o remount,mod:/your/writable/branch=ro /your/aufs/root
+or
+# auplink /your/aufs/root flush
+# mount -o remount,noplink /your/aufs/root
+or
+# auplink /your/aufs/root flush
+# mount -o remount,del:/your/aufs/branch /your/aufs/root
+or
+# auplink /your/aufs/root flush
+# mount -o remount,append:/your/aufs/branch /your/aufs/root
+.fi
+
+The plinks are kept both in memory and on disk. When they consumes too much
+resources on your system, you can use the 'auplink' script at anytime and
+throw away the unnecessary pseudo-links in safe.
+
+Additionally, the 'auplink' script is very useful for some security reasons.
+For example, when you have a directory whose permission flags
+are 0700, and a file who is 0644 under the 0700 directory. Usually,
+all files under the 0700 directory are private and no one else can see
+the file. But when the directory is 0711 and someone else knows the 0644
+filename, he can read the file.
+Basically, aufs pseudo-link feature creates a temporary link under the
+directory whose owner is root and the permission flags are 0700.
+But when the writable branch is NFS, aufs sets 0711 to the directory.
+When the 0644 file is pseudo-linked, the temporary link, of course the
+contents of the file is totally equivalent, will be created under the
+0711 directory. The filename will be generated by its inode number.
+While it is hard to know the generated filename, someone else may try peeping
+the temporary pseudo-linked file by his software tool which may try the name
+from one to MAX_INT or something.
+In this case, the 0644 file will be read unexpectedly.
+I am afraid that leaving the temporary pseudo-links can be a security hole.
+It make sense to execute 'auplink /your/aufs/root flush'
+periodically, when your writable branch is NFS.
+When your writable branch is not NFS, or all users are careful enough to set 0600
+to their private files, you don't have to worry about this issue.
+
+If you don't want this feature, use 'noplink' mount option and you don't need
+to install 'auplink' script and 'aulchown' binary.
+
+.SS The behaviours of 'plink' and 'noplink'
+This sample shows that the 'f_src_linked2' with 'noplink' option cannot follow
+the link.
+
+.nf
+none on /dev/shm/u type aufs (rw,xino=/dev/shm/rw/.aufs.xino,br:/dev/shm/rw=rw:/dev/shm/ro=ro)
+$ ls -li ../r?/f_src_linked* ./f_src_linked* ./copied
+ls: ./copied: No such file or directory
+15 -rw-r--r--  2 jro jro 2 Dec 22 11:03 ../ro/f_src_linked
+15 -rw-r--r--  2 jro jro 2 Dec 22 11:03 ../ro/f_src_linked2
+22 -rw-r--r--  2 jro jro 2 Dec 22 11:03 ./f_src_linked
+22 -rw-r--r--  2 jro jro 2 Dec 22 11:03 ./f_src_linked2
+$ echo abc >> f_src_linked
+$ cp f_src_linked copied
+$ ls -li ../r?/f_src_linked* ./f_src_linked* ./copied
+15 -rw-r--r--  2 jro jro 2 Dec 22 11:03 ../ro/f_src_linked
+15 -rw-r--r--  2 jro jro 2 Dec 22 11:03 ../ro/f_src_linked2
+36 -rw-r--r--  2 jro jro 6 Dec 22 11:03 ../rw/f_src_linked
+53 -rw-r--r--  1 jro jro 6 Dec 22 11:03 ./copied
+22 -rw-r--r--  2 jro jro 6 Dec 22 11:03 ./f_src_linked
+22 -rw-r--r--  2 jro jro 6 Dec 22 11:03 ./f_src_linked2
+$ cmp copied f_src_linked2
+$
+
+none on /dev/shm/u type aufs (rw,xino=/dev/shm/rw/.aufs.xino,noplink,br:/dev/shm/rw=rw:/dev/shm/ro=ro)
+$ ls -li ../r?/f_src_linked* ./f_src_linked* ./copied
+ls: ./copied: No such file or directory
+17 -rw-r--r--  2 jro jro 2 Dec 22 11:03 ../ro/f_src_linked
+17 -rw-r--r--  2 jro jro 2 Dec 22 11:03 ../ro/f_src_linked2
+23 -rw-r--r--  2 jro jro 2 Dec 22 11:03 ./f_src_linked
+23 -rw-r--r--  2 jro jro 2 Dec 22 11:03 ./f_src_linked2
+$ echo abc >> f_src_linked
+$ cp f_src_linked copied
+$ ls -li ../r?/f_src_linked* ./f_src_linked* ./copied
+17 -rw-r--r--  2 jro jro 2 Dec 22 11:03 ../ro/f_src_linked
+17 -rw-r--r--  2 jro jro 2 Dec 22 11:03 ../ro/f_src_linked2
+36 -rw-r--r--  1 jro jro 6 Dec 22 11:03 ../rw/f_src_linked
+53 -rw-r--r--  1 jro jro 6 Dec 22 11:03 ./copied
+23 -rw-r--r--  2 jro jro 6 Dec 22 11:03 ./f_src_linked
+23 -rw-r--r--  2 jro jro 6 Dec 22 11:03 ./f_src_linked2
+$ cmp copied f_src_linked2
+cmp: EOF on f_src_linked2
+$
+.fi
+
+.\"
+.\" If you add/del a branch, or link/unlink the pseudo-linked
+.\" file on a branch
+.\" directly, aufs cannot keep the correct link count, but the status of
+.\" "pseudo-linked."
+.\" Those files may or may not keep the file data after you unlink the
+.\" file on the branch directly, especially the case of your branch is
+.\" NFS.
+
+If you add a branch which has fileA or fileB, aufs does not follow the
+pseudo link. The file on the added branch has no relation to the same
+named file(s) on the lower branch(es).
+If you use noxino mount option, pseudo link will not work after the
+kernel shrinks the inode cache.
+
+.\" This feature will not work for squashfs since its inode is tricky.
+.\" When the inode is hardlinked, squashfs inodes has the same inode
+.\" number and correct link count, but the inode memory object is
+.\" different. Squashfs inodes are generated for each, even they are
+.\" hardlinked.
+
+.\" ----------------------------------------------------------------------
+.SH User's Direct Branch Access (UDBA)
+UDBA means a modification to a branch filesystem manually or directly,
+e.g. bypassing aufs.
+While aufs is designed and implemented to be safe after UDBA,
+it can make yourself and your aufs confused. And some information like
+aufs inode will be incorrect.
+For example, if you rename a file on a branch directly, the file on
+aufs may
+or may not be accessible through both of old and new name.
+Because aufs caches various information about the files on
+branches. And the cache still remains after UDBA.
+
+Aufs has a mount option named 'udba' which specifies the test level at
+access time (at d_revalidate time) whether UDBA was happened or not.
+.
+.TP
+.B udba=none
+Aufs trusts the dentry and the inode cache on the system, and never
+test about UDBA. With this option, aufs runs fastest, but it may show
+you incorrect data.
+
+It is recommended to use this option only when you are sure that
+nobody access a file on a branch.
+It might be difficult for you to achieve real 'no UDBA' world when you
+cannot stop your users doing 'find / -ls' or something.
+If you really want to forbid all of your users to UDBA, here is a trick
+for it.
+With this trick, users cannot see the
+branches directly and aufs runs with no problem, except 'auplink' script.
+But if you are not familiar with aufs, this trick may make
+yourself confused.
+
+.nf
+# d=/tmp/.aufs.hide
+# mkdir $d
+# for i in $branches_you_want_to_hide
+> do
+>	mount -n --bind $d $i
+> done
+.fi
+
+When you unmount the aufs, delete/modify the branch by remount, or you
+want to show the hidden branches again, unmount the bound
+/tmp/.aufs.hide.
+
+.nf
+# umount -n $branches_you_want_to_unbound
+.fi
+
+.
+.TP
+.B udba=reval
+Aufs tests only the existence of the file which existed. If
+the existed file was removed on the branch directly, aufs
+discard the cache about the file and
+re-lookup. So the data will be updated.
+This test is at minimum level to keep the performance and ensure the
+existence of a file.
+This is default and aufs runs still fast.
+
+This rule leads to some unexpected situation, but I hope it is
+harmless. Those are totally depends upon cache. Here are just a few
+examples.
+.
+.RS
+.IP \(bu 4
+If the file is cached as negative or
+not-existed, aufs doesn't test it. And the file is still handled as
+negative after a user created the file on a branch directly. If the
+file is not cached, aufs will lookup normally and find the file.
+.
+.IP \(bu 4
+When the file is cached as positive or existed, and a user created the
+same named file directly on the upper branch. Aufs detects the cached
+inode of the file is still existing and will show you the old (cached)
+file which is on the lower branch.
+.
+.IP \(bu 4
+When the file is cached as positive or existed, and a user renamed the
+file by rename(2) directly. Aufs detects the inode of the file is
+still existing. You may or may not see both of the old and new files.
+Todo: If aufs also tests the name, we can detect this case.
+.RE
+
+If your outer modification (UDBA) is rare and you can ignore the
+temporary and minor differences between virtual aufs world and real
+branch filesystem, then try this mount option.
+.
+.TP
+.B udba=inotify
+Aufs sets 'inotify' to all the accessed directories on its branches
+and receives the event about the dir and its children. It consumes
+resources, cpu, memory. And I am afraid that the performance will be
+damaged, but it is most strict option.
+There are some limitations of linux inotify, see also Inotify
+Limitation.
+
+When a user access the file which was notified UDBA before, the cached data
+about the file will be discarded and aufs re-lookup. So the data will
+be updated.
+To use this option, you need linux-2.6.18 and later, and need to
+enable CONFIG_INOTIFY and CONFIG_AUFS_UDBA_INOTIFY.
+
+.\" ----------------------------------------------------------------------
+.SH Linux Inotify Limitation
+Unfortunately, current inotify (linux-2.6.18) has some limitations,
+and aufs must derive it. I am going to address some harmful cases.
+
+.SS IN_ATTRIB, updating atime
+When a file/dir on a branch is accessed directly, the inode atime (access
+time, cf. stat(2)) may or may not be updated. In some cases, inotify
+doesn't fire this event. So the aufs inode atime may remain old.
+
+.SS IN_ATTRIB, updating nlink
+When the link count of a file on a branch is incremented by link(2)
+directly,
+inotify fires IN_CREATE to the parent
+directory, but IN_ATTRIB to the file. So the aufs inode nlink may
+remain old.
+
+.SS IN_DELETE, removing file on NFS
+When a file on a NFS branch is deleted directly, inotify may or may
+not fire
+IN_DELETE event. It depends upon the status of dentry
+(DCACHE_NFSFS_RENAMED flag).
+In this case, the file on aufs seems still exists. Aufs and any user can see
+the file.
+
+.SS IN_IGNORED, deleted rename target
+When a file/dir on a branch is unlinked by rename(2) directly, inotify
+fires IN_IGNORED which means the inode is deleted. Actually, in some
+cases, the inode survives. For example, the rename target is linked or
+opened. In this case, inotify watch set by aufs is removed by VFS and
+inotify.
+And aufs cannot receive the events anymore. So aufs may show you
+incorrect data about the file/dir.
+
+.\" ----------------------------------------------------------------------
+.\" .SH Exporting aufs via NFS
+.\" Aufs is supporting NFS-exporting.
+.\" Since aufs has no actual block device, you need to add NFS 'fsid' option at
+.\" exporting. Refer to the manaul of NFS about the detail of this option.
+.\" 
+.\" Additionally, there are several limitations.
+.\" .\" .RS
+.\" .IP \(bu 4
+.\" NFSv2 is not suppported. When you mount from your NFS client, you will need to
+.\" some NFS options, expecially it is nfsroot.
+.\" .IP \(bu 4
+.\" The branch filesystem must support iget().
+.\" .IP \(bu 4
+.\" The branch filesystem must have "." and ".." in a directory.
+.\" .IP \(bu 4
+.\" The branch filesystem should maintain inode.i_version. Currently VFS
+.\" handles it.
+.\" .\" .RE
+
+.\" ----------------------------------------------------------------------
+.SH Dentry and Inode Caches
+If you want to clear caches on your system, there are several tricks
+for that. If your system ram is low, try 'find /large/dir -ls >
+/dev/null'.
+It will read many inodes and dentries and cache them. Then old caches will be
+discarded.
+But when you have large ram or you don't have such large
+directory, it is not effective.
+
+If you want to discard cache within a certain filesystem, try 'mount
+-o remount /your/mntpnt'. Some filesystem may return an error of
+EINVAL or something, but VFS discards the unused dentry/inode caches on the
+specified filesystem.
+
+.\" ----------------------------------------------------------------------
+.SH Compatible/Incompatible with Unionfs
+If you compile aufs with -DCONFIG_AUFS_COMPAT, dirs= option and =nfsro
+branch permission flag are available. They are interpreted as
+br: option and =ro flags respectively.
+ 'debug', 'delete', 'imap' options are ignored silently. When you
+compile aufs without -DCONFIG_AUFS_COMPAT, these three options are
+also ignored, but warning message is issued.
+
+And there is a simple shell
+script 'unionctl' which is compatible with unionctl(8) in
+Unionfs, except --query action.
+This script executes mount(8) with 'remount' option and uses
+add/del/mod aufs mount options.
+If you are familiar with Unionfs and want to use unionctl(8), you can
+try this script instead of using mount -o remount,... directly.
+Aufs does not support ioctl(2) interface.
+This script is highly depending upon mount(8) in
+util-linux-2.12p package, and you need to mount /proc to use this script.
+If your mount(8) version differs, you can try modifying this
+script. It is very easy.
+
+Aufs uses the external inode number table by default.
+
+The default branch permission for the first branch is 'rw', and the
+rest is 'ro'.
+
+The whiteout is for hiding files on lower branches. Also it is applied
+to stop readdir going lower branches.
+The latter case is called 'opaque directory.' Any
+whiteout is an empty file, it means whiteout is just an mark.
+In the case of hiding lower files, the name of whiteout is
+'\*[AUFS_WH_PFX]<filename>.'
+And in the case of stopping readdir, the name is
+"\*[AUFS_WH_PFX]\*[AUFS_WH_PFX].opq" or
+"\*[AUFS_WH_PFX]__dir_opaque." The name depends upon your compile
+configuration
+CONFIG_AUFS_COMPAT.
+.\" All of newly created or renamed directory will be opaque.
+All whiteouts are hardlinked, including '<writable branch top
+dir>/\*[AUFS_WH_PFX]\*[AUFS_WH_BASENAME].'
+
+The hardlink on an ordinary (disk based) filesystem does not
+consume inode resource newly. But in linux tmpfs, the number of free
+inodes will be decremented by link(2). It is recommended to specify
+nr_inodes option to your tmpfs if you meet ENOSPC. Use this option
+after checking by 'df -i'.
+
+When you rmdir or rename-to the dir who has a number of whiteouts,
+aufs rename the dir to the temporary whiteouted-name like
+'\*[AUFS_WH_PFX]<dir>.<random hex>.' Then remove it after actual operation.
+cf. mount option 'dirwh'.
+
+.\" ----------------------------------------------------------------------
+.SH Incompatible with an ordinary filesystem
+stat(2) returns the inode info from the first existence inode among
+the branches, except the directory link count.
+Aufs computes the directory link count larger than the exact value usually, in
+order to keep UNIX filesystem semantics, or in order to shut find(1) mouth up.
+The size of a directory may be wrong too, but it has to do no harm.
+
+statfs(2) returns the first branch info except namelen. The namelen is
+decreased by the whiteout prefix length.
+
+Remember, seekdir(3) and telldir(3) are not defined in POSIX. They may
+not work as you expect. Try rewinddir(3) or re-open the dir.
+
+The whiteout prefix (\*[AUFS_WH_PFX]) is reserved on all branches. Users should
+not handle the filename begins with this prefix.
+
+If you dislike the difference between the aufs entries in /etc/mtab
+and /proc/mounts, and if you are using mount(8) in util-linux package,
+then try ./mount.aufs script. Copy the script to /sbin/mount.aufs.
+This simple script tries updating
+/etc/mtab. If you don't care about /etc/mtab, you can ignore this
+script.
+Remember this script is highly depending upon mount(8) in
+util-linux-2.12p package, and you need to mount /proc.
+
+Since aufs uses its own inode and dentry, your system may cache huge
+number of inodes and dentries. It can be as twice as all of the files
+in your union.
+It means that unmounting or remounting readonly at shutdown time may
+take a long time, since mount(2) in VFS tries freeing all of the cache
+on the target filesystem.
+.\" In this case, you had better try "echo 2 > /proc/sys/vm/drop_caches"
+.\" just before unmounting in shutdown procedure.
+.\" It frees unused inodes and dentries quickly.
+.\" If your system cache is not so large, you don't need this trick.
+
+When you open a directory, aufs will open several directories
+internally.
+It means you may reach the limit of the number of file descriptor.
+And when the lower directory cannot be opened, aufs will close all the
+opened upper directories and return an error.
+
+Linux kernel has a configuration of CONFIG_DEBUG_PROVE_LOCKING in order
+to check locks. In aufs, CONFIG_PROVE_LOCKING
+produces messages unwillingly but harmless, since aufs calls the
+branch filesystem operation as VFS does.
+For example, vfs_link() locks inode mutex as NORMAL subclass and calls aufs
+link operation. aufs_link() calls vfs_link() with passing the inodes
+on branch filesystem. Finally vfs_link() locks inode mutex on the
+branch as the same subclass again.
+CONFIG_DEBUG_PROVE_LOCKING may think those locks are in the
+same subclass and nested. Actually they are in
+different subclasses. One is virtual aufs inode, and the other is real
+hidden (branch) inode. But there is no method to specify the lock
+subclass to VFS functions.
+
+And CONFIG_DEBUG_PROVE_LOCKING also checks the lock class dependency.
+Most of operations to a file will grab locks in this order,
+i_mutex of aufs inode,
+aufs (superblock, dentry info, inode info) read/write semaphores,
+i_mutex of branch filesystem inode.
+CONFIG_DEBUG_PROVE_LOCKING treats this lock sequence as circular,
+since aufs semaphores are depending upon VFS i_mutex and then grabs
+i_mutex of branch filesystem inode.
+
+Finally, aufs gave up supporting CONFIG_DEBUG_PROVE_LOCKING. Instead,
+you can try CONFIG_AUFS_DEBUG and CONFIG_AUFS_DEBUG_RWSEM which
+validate the lock correctness.
+
+The sub-mount under the branch
+of local filesystem
+is ignored.
+For example, if you have mount another filesystem on
+/branch/another/mntpnt, the files under 'mntpnt' will be ignored by aufs.
+It is recommended to mount the sub-mount under the mounted aufs.
+For example,
+
+.nf
+# sudo mount /dev/sdaXX /ro_branch
+# d=another/mntpnt
+# sudo mount /dev/sdbXX /ro_branch/$d
+# mkdir -p /rw_branch/$d
+# sudo mount -t aufs -o br:/rw_branch:/ro_branch none /aufs
+# sudo mount -t aufs -o br:/rw_branch/${d}:/ro_branch/${d} none /aufs/another/$d
+.fi
+
+I have never tested NFSv4 as aufs branch.
+
+There are several characters which are not allowed to use in a branch
+directory path and xino filename. See detail in Branch Syntax and Mount
+Option.
+
+The file-lock which means fcntl(2) with F_SETLK, F_SETLKW or F_GETLK, flock(2)
+and lockf(3), is applied to virtual aufs file only, not to the file on a
+branch. It means you can break the lock by accessing a branch directly.
+TODO: check 'security' to hook locks, as inotify does.
+
+The fsync(2) and fdatasync(2) systemcalls return 0 which means success, even
+if the given file descriptor is not opened for writing.
+I am afraid this behaviour may violate some standards. Checking the
+behaviour of fsync(2) on ext2, aufs decided to return success.
+
+.\" ----------------------------------------------------------------------
+.SH EXAMPLES
+The mount options are interpreted from left to right except xino option. The
+xino option is always interpreted first. When you specify multiple xino options
+in a single remount operation, aufs interpret the last one (rightmost) only.
+The udba=inotify option is disabled during interpreting options, i.e. mount
+and remount time. Interpreting all options, the udba=inotify option is
+handled.
+
+These examples
+shows how the options are handled. (assuming /sbin/mount.aufs was
+installed)
+
+.nf
+# mount -v -t aufs br:/day0:/base none /u
+none on /u type aufs (rw,xino=/day0/.aufs.xino,br:/day0=rw:/base=ro)
+# mount -v -o remount,\\
+	prepend:/day1,\\
+	xino=/day1/xino,\\
+	mod:/day0=ro,\\
+	del:/day0 \\
+	/u
+none on /u type aufs (rw,xino=/day1/xino,br:/day1=rw:/base=ro)
+.fi
+
+.nf
+# mount -t aufs br:/rw none /u
+# mount -o remount,append:/ro /u
+different uid/gid/permission, /ro
+# mount -o remount,del:/ro /u
+# mount -o remount,nowarn_perm,append:/ro /u
+#
+(there is no warning)
+.fi
+
+.\" If you want to expand your filesystem size, aufs may help you by
+.\" adding an writable branch. Since aufs supports multiple writable
+.\" branches, the old writable branch can be being writable, if you want.
+.\" In this example, any modifications to the files under /ro branch will
+.\" be copied-up to /new, but modifications to the files under /rw branch
+.\" will not.
+.\" And the next example shows the modifications to the files under /rw branch
+.\" will be copied-up to /new/a.
+.\" 
+.\" Todo: test multiple writable branches policy. cpup=nearest, cpup=exist_parent.
+.\" 
+.\" .nf
+.\" # mount -v -t aufs br:/rw:/ro none /u
+.\" none on /u type aufs (rw,xino=/rw/.aufs.xino,br:/rw=rw:/ro=ro)
+.\" # mkfs /new
+.\" # mount -v -o remount,add:1:/new=rw /u
+.\" none on /u type aufs (rw,xino=/rw/.aufs.xino,br:/rw=rw:/new=rw:/ro=ro)
+.\" .fi
+.\" 
+.\" .nf
+.\" # mount -v -t aufs br:/rw:/ro none /u
+.\" none on /u type aufs (rw,xino=/rw/.aufs.xino,br:/rw=rw:/ro=ro)
+.\" # mkfs /new
+.\" # mkdir /new/a new/b
+.\" # mount -v -o remount,add:1:/new/b=rw,prepend:/new/a,mod:/rw=ro /u
+.\" none on /u type aufs (rw,xino=/rw/.aufs.xino,br:/new/a=rw:/rw=ro:/new/b=rw:/ro=ro)
+.\" .fi
+
+And there is a good sample which is for network booted diskless machines. See
+sample/ in detail.
+
+.\" ----------------------------------------------------------------------
+.SH DIAGNOSTICS
+When you add an branch to your union, aufs may warn you about the
+privilege or security of the branch, which is the permission bits,
+owner and group of the top directory of the branch.
+If your upper writable branch has a world writable top directory,
+a malicious user can create any files on the writable branch directly,
+like copyup and modify manually. I am afraid it can be a security
+issue.
+
+When you mount or remount your union without -o ro common mount option
+and without writable branch, aufs will warn you that the first branch
+should be writable.
+
+.\" It is discouraged to set both of 'udba' and 'noxino' mount options. In
+.\" this case the inode number under aufs will always be changed and may
+.\" reach the end of inode number which is a maximum of unsigned long. If
+.\" the inode number reaches the end, aufs will return EIO repeatedly.
+
+.\" .SH Current Limitation
+.
+.\" ----------------------------------------------------------------------
+.\" SYNOPSIS
+.\" briefly describes the command or function's interface.  For  commands,  this
+.\" shows the syntax of the command and its arguments (including options); bold-
+.\" face is used for as-is text and italics are  used  to  indicate  replaceable
+.\" arguments. Brackets ([]) surround optional arguments, vertical bars (|) sep-
+.\" arate choices, and ellipses (...) can be repeated.  For functions, it  shows
+.\" any required data declarations or #include directives, followed by the func-
+.\" tion declaration.
+.
+.\" DESCRIPTION
+.\" gives an explanation of what the command, function, or format does.  Discuss
+.\" how  it  interacts  with  files  and standard input, and what it produces on
+.\" standard output  or  standard  error.   Omit  internals  and  implementation
+.\" details  unless  they're critical for understanding the interface.  Describe
+.\" the usual case; for information on options  use  the  OPTIONS  section.   If
+.\" there  is some kind of input grammar or complex set of subcommands, consider
+.\" describing them in a separate USAGE section (and just place an  overview  in
+.\" the DESCRIPTION section).
+.
+.\" RETURN VALUE
+.\" gives a list of the values the library routine will return to the caller and
+.\" the conditions that cause these values to be returned.
+.
+.\" EXIT STATUS
+.\" lists the possible exit status values or a program and the  conditions  that
+.\" cause these values to be returned.
+.
+.\" USAGE
+.\" describes the grammar of any sublanguage this implements.
+.
+.\" FILES
+.\" lists  the  files the program or function uses, such as configuration files,
+.\" startup files, and files the program directly operates on.   Give  the  full
+.\" pathname  of  these  files,  and  use the installation process to modify the
+.\" directory part to match user preferences.  For many  programs,  the  default
+.\" installation  location is in /usr/local, so your base manual page should use
+.\" /usr/local as the base.
+.
+.\" ENVIRONMENT
+.\" lists all environment variables that affect your program or function and how
+.\" they affect it.
+.
+.\" SECURITY
+.\" discusses security issues and implications.  Warn  about  configurations  or
+.\" environments  that should be avoided, commands that may have security impli-
+.\" cations, and so on, especially if they aren't obvious.  Discussing  security
+.\" in  a  separate section isn't necessary; if it's easier to understand, place
+.\" security information in the other sections (such as the DESCRIPTION or USAGE
+.\" section).  However, please include security information somewhere!
+.
+.\" CONFORMING TO
+.\" describes any standards or conventions this implements.
+.
+.\" NOTES
+.\" provides miscellaneous notes.
+.
+.\" BUGS
+.\" lists  limitations,  known defects or inconveniences, and other questionable
+.\" activities.
+
+.SH COPYRIGHT
+Copyright \(co 2005, 2006, 2007 Junjiro Okajima
+
+.SH AUTHOR
+Junjiro Okajima
+
+.\" SEE ALSO
+.\" lists  related  man  pages in alphabetical order, possibly followed by other
+.\" related pages or documents.  Conventionally this is the last section.

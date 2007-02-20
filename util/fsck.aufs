@@ -1,0 +1,48 @@
+#!/bin/sh -
+
+# Copyright (C) 2005-2006 Junjiro Okajima
+#
+# This program, aufs is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
+
+# $Id: fsck.aufs,v 1.2 2006/06/19 06:18:15 sfjro Exp $
+
+exit 1 # not implemented
+
+tmp=/tmp/$$
+tmp=/tmp/a
+br=0
+echo $@
+set -e
+trap "ret=\$?; test \$ret -ne 0 && echo abend \$ret" 0
+
+for i
+do
+	eval "brpath${br}=$i"
+	echo `eval \$brpath${br}`
+	#echo branch $br : `eval $path${br}`
+	cd $i
+	find . \( -type d -fprint $tmp.$br.d \) \
+		-o -fprint $tmp.$br.f
+	cd $OLDPWD
+	br=$((1+$br))
+done
+exit
+
+nbr=br
+br=0
+while [ $br -le $((${nbr}-1)) ]
+do
+	fgrep /.wh.
+done

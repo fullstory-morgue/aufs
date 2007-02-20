@@ -1,0 +1,55 @@
+
+aufs sample for diskless machines
+Junjiro Okajima
+
+# $Id: README,v 1.1 2006/12/22 06:08:56 sfjro Exp $
+
+Please run "man -l diskless.6aufs", or "make diskless.html" and read it.
+
+FILES
+=====
+Makefile
+	main makefile.
+README
+	and you will know everything.
+clients
+	table of diskless machines.
+	sample dhcpd.conf will be generated using this file.
+comount.sh
+	actual mount script for diskless machines. retrieved by linuxrc on
+	diskless machines.
+custom.sh
+	customizing locally installed Debian system.
+def.mk
+	variable definitions for Makefile.
+dhcpdDL.conf.in
+	template of dhcpd.conf.
+	dhcpd.conf will be generated using this file.
+diskless.6aufs
+	a manual.
+func.sh
+	shell functions.
+ifiles/
+	initial files for locally installed Debian system.
+initrd.mk
+	makefile for initrd.
+linuxrc
+	initial script for diskless machines, included in initrd.
+local.mk
+	install Debian system locally under the dir specified in def.mk.
+local.sh
+	install Debian system locally under the dir specified in def.mk.
+preseed.sh
+	preseeding/pre-configuring locally installed Debian system.
+pxe.conf
+	pxelinux configuration file, will be copied to the tftp dir where
+	specified in def.mk
+retr.mk
+	retrieves Debian packages and spool them.
+
+
+Enjoy the centerized maintenance for a bunch of machines, by aufs and this sample.
+
+# Local variables: ;
+# mode: text;
+# End: ;

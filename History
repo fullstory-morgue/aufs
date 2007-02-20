@@ -1,0 +1,341 @@
+
+History of aufs
+Junjiro Okajima
+
+# $Id: History,v 1.5 2007/02/19 03:53:42 sfjro Exp $
+
+Note:
+- the described date are all in JST.
+- CVS handles UTC as its timezone.
+- all these descriptions should be archived in the ML on sourceforge, since I
+  always post there and let users know. But sometimes archiving failed. this
+  is the main reason to begin writing this file.
+
+----------------------------------------------------------------------
+
+20070219
+- mmap behaviour changed, by removing mmap counter.
+- bugfix: after a branch was changed from RO to RW, the hidden opened file
+  should be closed once.
+- bugfix: when the given mount options are too long, aufs should return an
+  error expectedly, reported by Tomas M.
+- support directory link count.
+- introduce ./Kconfig.in and 'make -f lock.mk kconfig', which will
+  generate ./fs/aufs/Kconfig.
+- introduce configurable amount of branches. but I am afraid you will
+  have to wait for aufs supports sysfs.
+- still testing LSM.
+- refine hidden inotify, still testing. disable udba=inotify temporary while
+  parsing mount options.
+- call vfs_read/write() instead of hidden file operation, in order to support
+  LSM and notify.
+- extract some functions from super.c, and create a new file module.c.
+
+20070212
+- begin supporting a readonly no-whiteout aufs branch of another aufs, still
+  testing.
+- begin supporting exporting aufs via NFS, still testing.
+- begin supporting LSM, still testing.
+- bugfix unionctl: typo or dropped single quotation.
+- bugfix unionctl: support a relative path for --whereis.
+- unionctl aborts when the --whereis argument does not exist.
+
+20070205
+- bugfix: a test in adding a branch, included in a report from
+  Laville Guillaume.
+  check the adding branch to be overlapped or not, even if it is a
+  mount-point.
+- bugfix: unionctl script --whereis option.
+  the action should print the branch path, instead of the given argument, even
+  it has only one argument.
+- begin supporting inode S_PRIVATE flag and CONFIG_SECURITY. still testing.
+- remove all the nested function definition, since some compilers (or their
+  configuration) issue a warning about that.
+
+20070129
+- introduce diropq option.
+  the behaviour of mkdir(2) and rename(2) dir case is changed. now they don't
+  make '.wh..wh..opq' when it is not necessary. this is the default. if
+  you dislike this behaviour and still want to make it always, use
+  'diropq=always' mount option. see the manual in detail.
+- bugfix: make fsync(2) return success when the file is not opened for writing,
+  reported by Martin Walter.
+  I am afraid this behaviour may violate some standards. Checking the
+  behaviour of ext2, aufs decided to return success.
+- rename some functions
+	+ lookup_whtmp() to lkup_whtmp().
+	+ lock_hdir_lookup_wh() to lock_hdir_lkup_wh().
+	+ lookup_wh() to lkup_wh().
+- I forgot update AUFS_VERSION on last Monday and I updated it on
+  Thursday. Sorry for confusion.
+
+20070122
+- introduce a new file History.
+- rename wh.[ch] to whout.[ch].
+- rename some symbols.
+	+ do_cache_alloc()	to aufs_cache_alloc().
+	+ do_cache_free()	to aufs_cache_free().
+	+ dt_hidden_dentry in struct dtime, to dt_h_dentry.
+	+ dtohd()		to h_dptr().
+	+ dtohd_index()		to h_dptr_i().
+	+ dtopd()		to dtodi().
+	+ fi_hidden_vm_ops in struct aufs_finfo, to fi_h_vm_ops.
+	+ ftobr_index()		to ftobr().
+	+ ftohf()		to h_fptr().
+	+ ftohf_index()		to h_fptr_i().
+	+ ftopd()		to ftofi().
+	+ hidden_dentry in struct rmdir_whtmp_arg, to h_dentry.
+	+ hidden_root in struct opt_del, to h_root.
+	+ hidden_root in struct opt_mod, to h_root.
+	+ itohi()		to h_iptr().
+	+ itohi_index()		to h_iptr_i().
+	+ itopd()		to itoii().
+	+ lookup_dentry()	to lkup_dentry().
+	+ lookup_negative()	to lkup_neg().
+	+ lookup_one()		to lkup_one().
+	+ refresh_dentry()	to refresh_hdentry().
+	+ refresh_inode()	to refresh_hinode().
+	+ sbt()			to sbtype().
+	+ set_dtohd_index()	to set_h_dptr().
+	+ set_ftohf_index()	to set_h_fptr().
+	+ set_itohi_index()	to set_h_iptr().
+	+ sio_lookup_one()	to sio_lkup_one().
+	+ stopd()		to stosi().
+
+20070117
+- bugfix i_op.c: uninitialized variable in case of CONFIG_AUFS_FAKE_DM
+  enabled, reported and fixed by Jason Lunz.
+
+20070115
+- support 'security' model, reported and tested by Ulrich Holeschak.
+  you need to disable CONFIG_AUFS_FAKE_DM.
+- introduce umount.aufs script.
+- umount.aufs and mount.aufs scripts calls auplink script when it is needed
+  and configured.
+- auplink script supports /etc/default/auplink configuration.
+- bugfix: a comment in local.mk, reported and fixed by Wilhelm Meier.
+
+20070112
+- Jason Lunz sent a patch which creates linux/fs/aufs/Kconfig.
+
+20070108
+- disable CONFIG_AUFS_COMPAT by default.
+  If you still want to use it, enable it manually. But this configuration will
+  be removed in a few weeks.
+- a new script named auplink, with an executable aulchown and a mount option
+  'clean_plink', are introduced, in order to reproduce all hardlinks on a
+  writable branch.
+- bugfix: full-fix for pseudo-link which was temporary half-fix in last update.
+- bugfix: link instead of copyup for an already pseudo-linked file.
+- bugfix: hide the unnecessary 'remount' option before comm(1) in mount.aufs script.
+
+20061222
+- I found a bug about pseudo-link. It keeps inodes incorrectly, and users may
+  see the deleted inode. The fix will complete next year. Until then,
+  pseudo-link feature and 'plink' mount option are disabled and 'noplink' is
+  the default mount option. It means the the internal behaviour like
+  copy-up will be changed.
+- begin supporting linux-2.6.20.
+- support 'sillyrename' on NFS branch
+- added a sample for diskless machines which uses aufs as root filesystem.
+- CONFIG_AUFS_COMPAT will be removed in a few weeks. The code in case of
+  CONFIG_AUFS_COMPAT=y remains. In detail,
+	+ default branch permission
+	+ warning about wrong mount option
+	+ /proc/mounts shows 'br:' instead of 'dirs='
+	+ .wh.__dir_opaque is replaced by .wh..wh..opq
+- bugfix: on NFS branch, after rename(2) to an existed file, the new named
+  file may refer to the old inode. this fix is not completed and does not
+  support plink option. This is the reason of disabling pseudo-link temporary.
+- bugfix: a pipline in unionctl script uses 'return', but it just finishes the
+  pipeline and doesn't exit from the function.
+
+20061218
+- discussing with Tomas M, introduced a new action --whereis to unionctl.
+- remove the kernel version from the aufs version string.
+  some people misunderstands that the kernel version in the aufs version
+  string means the supported kernel version. Actually, it is the tested kernel
+  version, as it is described in README.
+- new mount option, warn_perm and nowarn_perm.
+- support the space characters in the paths of mount point and branches.
+- support statfs(2) when the first branch is NFS.
+
+20061211
+- support linux-2.6.19, including NFS branch. you need lhash.patch.
+- in the manual, describe that the white characters, comma, colon in the path
+  are not allowed. suggested by Tomas M.
+- unionctl script, support CONFIG_AUFS_COMPAT. reported and fixed by Tomas M.
+- prepend double wh prefix to tmpname at renaming dir.
+
+20061204
+- mis-detecting CONFIG_BLK_DEV_LOOP.
+- support the cases without /sbin/mount.aufs
+	+ remove si_dupopt.
+	+ compare the xino filename.
+
+20061127
+- bugfix dir->fsync: it may be called with @file being NULL, especially from
+  nfsv4, reported by Klaus Knopper.
+- unionctl script supports --list option, requested by Tomas M.
+
+20061120
+- pseudo-link: update hidden inode pointers by new function d_iput().
+- pseudo-link: stop pseudo-link when the target inode already exists.
+- cpup: restore the inode pointers after cpup whiteout failure.
+- hinotify: restore the counter after rename_whtmp() failure.
+
+20061113
+- bugfix: before 2.6.17, msync(2) calls ->fsync without
+  lock. CONFIG_AUFS_DEBUG failed checking the lock, reported by Wesley Chow.
+- bugfix: link(2), when the link target inode already exists on the target
+  branch, but the target name, aufs_link() failed copyup.
+- bugfix: re-setting xino after setting noxino, aufs failed setting.
+- force noxino when xino_init() returns an error
+- warn only once per 255 times about "too many pseudo links".
+
+20061106
+- support linux-2.6.15, limited. dropped features are,,,
+	+ plink and noplink mount option
+	+ udba=inotify mount option
+	+ NFS branch
+
+20061023
+- 'anonymous nobody' kindly sent a patch to SF 'Patches' place. The patch
+  is for merging aufs into kernel source tree.
+- begin supporting linux-2.6.19-rc2, unfinished, untested and NFS branch
+  is not supported.
+- gave up supporting read/write to the mmapped file on NFS branch. it
+  seems a bug in linux and it can happen on any filesystem. it will be
+  fixed in linux-2.6.19 or later.
+- new structure aufs_hdentry for hidden dentry.
+- bugfix: at restoring the timestamps of the parent dir when mkdir(2) failed.
+- bugfix: editing miss after parsing options.
+
+20061016
+- introduce new mount option 'udba', support 'udba=inotify' using
+  inotify.
+- describe about udba in aufs.5.
+- remove CONFIG_AUFS_DBA and introduce CONFIG_AUFS_HINOTIFY.
+- remove CONFIG_AUFS_NO_KSIZE and introduce CONFIG_AUFS_KSIZE_PATCH.
+- bugfix: always cpup atime in aufs_read/write.
+- bugfix: support write(2) to mmapped file on NFS branch.
+- bugfix for 2.6.17: umount_begin() may not be called in before
+  linux-2.6.18 kernel, call it from put_super() too.
+
+20061009
+- bugfix: call igrab() before ii_write_unlock() to prevent from destroying
+  inode in half_refresh_plink().
+- bugfix: support the case of the first branch is not writable.
+- testing lookup_whtmp().
+- testing dba.
+- prepare inotify for hidden inodes.
+
+20061002
+- bugfix: discard illegal dentry in case of undefined DBA.
+- CONFIG_AUFS_DBA will be removed after introducing 'dba' mount
+  option.
+- prepare removing inotify.
+- add 'do_xino' parameter to set_itohi_index().
+- support read(2) to mmapped file on nfs.
+
+20060925
+- begin of inotify for hidden inodes.
+  CONFIG_AUFS_DBA (Direct Branch Access) requires CONFIG_INOTIFY.
+  still testing.
+- local macro RwSemMutex for debugging becomes global configuration
+  CONFIG_AUFS_DEBUG_RWSEM.
+- gave up supporting CONFIG_DEBUG_PROVE_LOCKING.
+- read(2) to NFS branch is not supported when the file is mmapped.
+- well-behaved opening a file on NFS branch.
+- refined memory allocation which size is zero.
+
+20060911
+- There might be a bug around kfree() in aufs. CONFIG_DEBUG_SLAB has
+  reported slab corruption once. It is not reproducible but I am still
+  working on.
+- the fstype name is always "aufs" as I have announced.
+- minor optimization by GCC's branch prediction or linux's unlikely macro.
+- introducing plink/noplink mount option.
+
+20060904
+- support pseudo-link. branch and hidden_inode has branch id.
+- rename wq.[ch] to wkq.[ch]. remove wq_nowait().
+- reduce smp memory block which looks unnecessary.
+- two threads (reinit hardlinked wh, and rmdir whtmp) do not use
+  workqueue because of memory leak possibility.
+- begin of aufs_lookup_one_len() and AUFS_MUST_FOLLOW branch flag.
+- remove si_xino_mutex and make si_xino as atomic_long_t.
+- give up DEBUG_PROVE_LOCKING.
+
+20060828
+- bugfix: some mount(8) requires one more argument, reported by Tomas M.
+- bugfix: nopage() accessed incorrect file, reported by Martin Oehler.
+- bugfix: recursive kthread call, new macro is_kthread().
+- bugfix: to copyup a device file requires CAP_MKNOD in rename().
+- bugfix: removing a branch whose path name resembles the former option.
+- tried supporting SMP, but I am not confident. I don't have such machine.
+- xino write passes superio thread, I am afraid it is slower.
+- speed up vdir (minor).
+
+20060823
+- bugfix: macros for 'nested lock' should be compiled under
+  linux-2.6.18 only, reported by Heinrich Rebehn.
+
+20060821
+- introduce a workqueue or a thread pool, replacing superio.
+- hardlinked whiteout.
+- introduce CONFIG_AUFS_DBA (Direct Branch Access).
+- begin supporting linux-2.6.18(-rc4).
+- try DEBUG_PROVE_LOCKING introduced by linux-2.6.18(-rc4).
+
+20060814
+- introduce nested__func__.patch for 'sparse'.
+
+20060807
+- introduce hardlinked whiteouts.
+- support multiple writable branches.
+- bugfix: del branch and cwd (current working directory).
+- implement refresh dirs at remount time.
+- bugfix: '#if' -- '#ifdef' in super.c, reported and fixed by Martin Oehler.
+
+20060731
+- bugfix: revalidating after del branch.
+- bugfix: reset bwh in rename().
+- bugfix: update mount point i_version.
+- bugfix: remount may pass empty string.
+- add EXAMPLES to the manual.
+- bugfix: unionctl script supports a relative path, reported by Tomas M.
+
+20060724
+- support mmap without page-copy.
+
+20060717
+- introduce vdir, virtual or vertical directory, which is a seekable directory.
+- introduce mount.aufs script.
+- bugfix: symlink and device file in cpup_entry().
+- try detecting direct access by its timestamp.
+
+20060703
+- bugfix: new revalidate scheme.
+- simplified permission check.
+- ignore dirwh when the branch is NFS.
+
+2006 Jun
+- start CVS on sourceforge.
+
+2006 May
+- no activities since I joined the Unionfs team.
+
+2006 Apr
+- finish first basic implementation and tests.
+- make an application to sourceforge, as the name of aufs.
+
+2006 Feb
+- start implementing.
+
+2005 Dec
+- start planning and designing personally, the name was junionfs.
+
+# Local variables: ;
+# mode: text;
+# End: ;

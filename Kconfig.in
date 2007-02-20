@@ -1,0 +1,137 @@
+
+/* $Id: Kconfig.in,v 1.1 2007/02/19 03:31:29 sfjro Exp $ */
+
+#include <linux/version.h>
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,18)
+#include <linux/utsrelease.h>
+#endif
+
+config AUFS
+	tristate "Another unionfs"
+	help
+	Aufs is a stackable unification filesystem such as Unionfs, which
+	unifies several directories and provides a merged single directory.
+
+if AUFS
+comment "These options are generated automatically for "#UTS_RELEASE
+
+config AUFS_FAKE_DM
+	bool "Use simplified (fake) nameidata"
+	default y
+	help
+	Faking nameidata (VFS internal data), you can get better performance
+	in some cases.
+
+choice
+	prompt "Maximum number of branches"
+	default AUFS_BRANCH_MAX_CHAR
+	help
+	Specifies the maximum number of branches (or member directories) in a
+	single aufs. The larger value consumes more system resources.
+
+config AUFS_BRANCH_MAX_CHAR
+	bool "127 (signed char)"
+config AUFS_BRANCH_MAX_SHORT
+	bool "32767 (signed short)"
+endchoice
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,18)
+config AUFS_HINOTIFY
+	bool "Use inotify to detect actions on a branch"
+	depends on INOTIFY
+	default n
+	help
+	If you want to modify files on branches directly, eg. bypassing aufs,
+	and want aufs to detect the changes of them fully, then enable this
+	option and use 'udba=inotify' mount option.
+	See detail in aufs.5.
+
+comment "INOTIFY and AUFS_HINOTIFY are disabled"
+	depends on INOTIFY = n
+#endif
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,16)
+config AUFS_KSIZE_PATCH
+	bool "ksize.patch was applied or not"
+	depends on AUFS = m
+	default n
+	help
+	Aufs sometimes needs to re-allocate memory. If 'ksize' kernel internal
+	function is exported to modules, aufs runs efficiently in some cases.
+	If you applied 'CVS_TREE/aufs/ksize.patch' to your kernel and you are
+	compiling aufs as a module, then enable this option.
+	The ksize.patch does nothing but export the function.
+#endif
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,19)
+config AUFS_LHASH_PATCH
+	bool "lhash.patch for NFS branch was applied or not"
+	depends on NFS_FS
+	default n
+	help
+	If you use mounted NFS as an aufs branch filesystem, then you need to
+	apply the patch 'CVS_TREE/aufs/lhash.patch' to your kernel source, and
+	enable this configuration.
+	The lhash.patch makes the kernel function __lookup_hash() global and
+	exports it to modules.
+
+comment "NFS_FS and AUFS_LHASH_PATCH are disabled"
+	depends on NFS_FS = n
+#endif
+
+#if 0
+config AUFS_IPRIV_PATCH
+	bool "ipriv.patch for LSM was applied or not"
+	depends on SECURITY
+	default n
+	help
+	If you use LSM and want LSM to ignore the access from aufs to branches,
+	then you need to apply the patch 'CVS_TREE/aufs/ipriv.patch' to your
+	kernel source, enable this configuration, and use 'ipriv' mount
+	option.
+	The ipriv.patch introduces a new flag to i_state, and makes LSM to
+	check it.
+	LSM has a similar flag already in i_flags called S_PRIVATE. The
+	differece between two flags is only one. The new flag never be stored
+	in disk.
+
+comment "SECURITY and AUFS_IPRIV_PATCH are disabled"
+	depends on SECURITY = n
+#endif
+
+config AUFS_DEBUG
+	bool "Debug aufs"
+	default y
+	help
+	Enable this to compile aufs internal debug code.
+
+config AUFS_DEBUG_RWSEM
+	bool "Debug rwsem in aufs"
+	default n
+	help
+	Enable this to compile aufs internal debugging specific to rwsem. Much
+	slower.
+
+config AUFS_COMPAT
+	bool "Compatibility with Unionfs (obsolete)"
+	default n
+	help
+	This makes aufs compatible with unionfs-style mount options and some
+	behaviours.
+	The dirs= mount option and =nfsro branch permission flag are always
+	interpreted as br: mount option and =ro flag respectively. The
+	'debug', 'delete' and 'imap' mount options are ignored.
+	If you disable this option, you will get,
+	- aufs issues a wanring about the ignored mount options
+	- the default branch permission flag is set. RW for the first branch,
+	  and RO for the rests.
+	- the name of a internal file which represents the directory is
+	  'opaque', becomes '.wh..wh..opq'
+	- the 'diropq=w' mount option is set by default
+endif
+
+/*
+ * Local variables: ;
+ * mode: text;
+ * End: ;
+ */

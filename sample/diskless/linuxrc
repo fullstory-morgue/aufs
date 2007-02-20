@@ -1,0 +1,61 @@
+#!/bin/sh
+
+# aufs sample -- diskless system
+
+# Copyright (C) 2006, 2007 Junjiro Okajima
+#
+# This program, aufs is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
+
+# $Id: linuxrc,v 1.2 2007/01/08 01:58:50 sfjro Exp $
+
+set -e
+#echo here i am
+trap "test \$? -ne 0 && sleep 3600" 0
+
+#set
+#echo $PATH
+mount -nt proc proc /proc
+f=/proc/sys/kernel/printk
+echo 8 > $f
+
+eval `bootpc | egrep '^(HOSTNAME|SERVER|BOOTFILE|DOMAIN|DNSSRVS)='`
+test `cat /proc/sys/kernel/hostname` = $HOSTNAME
+export HOSTNAME SERVER BOOTFILE
+
+mount -t tmpfs tmp tmp
+remote=`dirname $BOOTFILE`
+for i in aufs.ko comount.sh
+do
+	tftp -g $SERVER -r $remote/$i -l tmp/$i > /dev/null 2>&1
+	test -f tmp/$i
+done
+insmod tmp/aufs.ko
+sh tmp/comount.sh
+#/bin/sh -i
+rm tmp/comount.sh
+
+d=/aufs/etc
+f=$d/resolv.conf
+mkdir -p $d
+test -e $f || { echo domain $DOMAIN; echo nameserver $DNSSRVS; } > $f
+
+#cat /proc/mounts; /bin/sh -i
+echo 0x0100 > /proc/sys/kernel/real-root-dev
+umount /proc
+
+cd aufs
+pivot_root . initrd
+#exec /sbin/init < /dev/console > /dev/console 2>&1 /dev/console
+trap "" 0

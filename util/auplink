@@ -1,0 +1,131 @@
+#!/bin/sh
+
+# Copyright (C) 2006, 2007 Junjiro Okajima
+#
+# This program, aufs is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
+
+# $Id: auplink,v 1.2 2007/01/15 04:58:15 sfjro Exp $
+
+#set -x
+tmp=/tmp/$$
+set -e
+
+Usage()
+{
+	cat <<- EOF 1>&2
+	usage: $0 aufs_dir list|cpup|flush
+	'list' shows the pseudo-linked inode numbers and filenames.
+	'cpup' copies-up all pseudo-link to the writeble branch.
+	'flush' calls 'cpup', and then "mount -o remount,clean_plink=inum"
+	and remove the whiteouted plink.
+	EOF
+	rm -f $tmp $tmp.*
+	exit 1
+}
+
+Find() # dir [ find_args ]
+{
+	local dir="$1"
+	shift
+	find "$dir" -xdev -noleaf $@
+}
+
+List()
+{
+	sed -e 's/^\([0-9]*\) .*$/-o -inum \1/' |
+	xargs > $tmp.args
+	Find "$aufs" \( `cut -c3- $tmp.args` \) $@
+}
+
+Cpup()
+{
+	List \( \( -type l -fprint $tmp.slink \) \
+		-o ! -type l -fprint $tmp.other  \)
+
+	# do nothing but update something. it causes copyup.
+	xargs -r touch -ac -r $tmp.other < $tmp.other
+	xargs -r aulchown < $tmp.slink
+}
+
+test $# -eq 2 || Usage
+cd "$1"
+aufs="$PWD"
+cd "$OLDPWD"
+
+do_flush=0
+f=${AUPLINK_CONFIG:-/etc/default/auplink}
+if [ -r $f ]
+then
+	. $f
+	for i in $FLUSH
+	do
+		test "$i" = "$aufs" -o "$i" = "ALL" || continue
+		do_flush=1
+		break
+	done
+fi
+case $2 in
+cpup|flush) test $do_flush -eq 0 && exit 0;;
+esac
+
+grep -w "$aufs" /proc/mounts |
+tail -1 |
+sed -e 's/\\/\\\\/g' |
+tr ',' '\n' |
+grep '^br:' |
+tr ':' '\n' |
+grep '=rw$' |
+sed -e 's/=rw$//' |
+while read wbr
+do
+	d=`echo $wbr/.wh..wh.plink`
+	# -printf '%n %p\n'
+	Find "$d" -maxdepth 1 ! -type d -printf '%n\t%p\n'
+done |
+while read nlink pname
+do
+	inum=`basename "$pname" | cut -f1 -d.`
+	echo $inum $nlink "$pname"
+done > $tmp
+test -s $tmp || { rm -f $tmp $tmp.*; exit 0; }
+
+# debug
+#mount -o remount,list_plink "$aufs"
+
+case $2 in
+list)
+	cut -f1 -d' ' $tmp | tr '\n' ' '
+	echo
+	List < $tmp
+	;;
+cpup)
+	Cpup < $tmp
+	;;
+flush)
+	#echo -n Flushing pseudo-links on "$aufs"...
+	Cpup < $tmp
+
+	# all are copied-up, and then remove all pseudo-links.
+	mount -o remount,clean_plink "$aufs"
+	cut -f3- -d' ' $tmp | xargs -r rm
+	# debug
+	#mount -o remount,list_plink "$aufs"
+	#echo done.
+	;;
+*)
+	Usage;;
+esac
+
+rm -f $tmp $tmp.*

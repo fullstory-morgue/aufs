@@ -1,0 +1,225 @@
+.
+.TH diskless aufs6 "Dec 2006" Linux "Aufs User's Manual"
+.SH NAME
+diskless \- aufs sample for management of diskless machines
+
+.\" $Id: diskless.6aufs,v 1.2 2007/01/08 01:58:50 sfjro Exp $
+
+.\" ----------------------------------------------------------------------
+.SH Introduction
+This scenario and sample scripts show you how to use aufs to manage multiple
+linux servers, in a simple but powerful centralized manner.
+These servers will be ordinary Web/Mail/Ftp servers, and all of
+them can be diskless, dataless or systemless.
+You need at least one essential internal server which
+has disk and serves PXE, TFTP, DHCP and NFS (or nbd/enbd/iSCSI/AOE) to the
+Web/Mail/Ftp servers.
+The Web/Mail/Ftp servers boot with PXE, TFTP, DHCP, then mount serveral NFS
+(or local filesystems, or nbd/enbd/iSCSI/AOE), and finally build aufs as the
+root filesystem. The users will access these Web/Mail/Ftp servers through
+network.
+In this scenario, I use Debian Sarge system and linux kernel 2.6.19. But you
+will be able to serve any linux distribution and kernel version you like. For
+example, you can use any live-cd image as base system.
+
+.\" ----------------------------------------------------------------------
+.SH Warning
+While I am trying to be safe and sure, there is no gurantee. For example,
+'make local' installs a Debian system under a local directory using chroot. If
+there was a bug, it might install something to your real root directory. Be
+careful when you modify these files.
+
+.\" ----------------------------------------------------------------------
+.SH Casts
+.ds IServer InternalServer
+.SS The internal server (\*[IServer])
+It serves PXE, TFTP, DHCP to the internal clients, and all of files via
+NFS. This server will be
+linux or any OS you like whichever support these protocols, and can be a
+single machine or multiple machines per protocol.
+In this scenario, I use a single machine, a Debian system.
+
+.ds IClient InternalClient
+.SS The real server or the internal client (\*[IClient])
+It is a diskless (in this scenario) linux, boot by PXE and TFTP which
+retrives data from \*[IServer], get its IP address by DHCP, mount
+several NFS, and serves HTTP, SMTP, FTP or anything else you set.
+
+.SS The real client or the user
+It is a real user which accesses the real server.
+
+.\" ----------------------------------------------------------------------
+.SH Customize
+To provide whole system files to \*[IClient], \*[IServer] uses NFS,
+in this document. But you can replace it by anything you like such like nbd,
+enbd, iSCSI or AOE. It is used as an aufs branch filesystem on \*[IClient].
+For readonly branch, although network block devices has an advantage in
+performance, you may want to use NFS for some maintenance reasons.
+Additionally, you can replace the NFS-exported system dirs/files by a single
+cdrom image file or something.
+
+If you have several NFS servers, it is recommended to make one NFS server
+exports one aufs branch, eg. one NFS server for plain linux system only, one
+for common site customization, one for common service customization, and so
+on.
+You will get advantages in performance because of distributing workload and
+effective caching on NFS servers.
+
+When your Web/Mail/Ftp servers are very busy, you had better to use local
+filesystem to store the log files. Also the swap space might be better to set
+on the local disk.
+There is a caution using nbd/enbd. Since they use a daemon in userspace,
+\*[IClient] may meet some troubles at shutdown time.
+
+In this sample, I use Debian Sarge system, and will try Debian Etch and Sid
+too. While to retrive and to install locally are large part of this sample, if
+your installer supports them natively, or you already have a whole system
+directory tree
+which can be exported, you can skip "make retr local".
+
+.\" ----------------------------------------------------------------------
+.SH Linux-2.6.19 NFS bug?
+When you export a directory as writable and it has two sub-direcotries dirA
+and dirB, a NFS client before linux-2.6.19 can mount them correctly like this,
+.nf
+# mount -o ro server:/expdir/dirA /ro
+# mount -o rw server:/expdir/dirB /rw
+.fi
+
+In linux-2.6.19, the NFS client cannot mount dirB as writable after dirA was
+mounted as readonly. The dirB is mounted as readonly even if you specify 'rw'
+mount option. Additionally, after mounting dirA and dirB, if you remount one
+of them as readonly (or readwrite), the other will be changed too.
+
+You need to place dirA and dirB on different filesystems on NFS server, in order
+to prevent linux-2.6.19 NFS client from this behaivour.
+I don't know it is a bug or not.
+
+.\" ----------------------------------------------------------------------
+.SH Simple trial
+1. edit def.mk to suit your environment.
+
+2. create priv.mk and priv_def.mk, if you want.
+
+3. 'make clean update retr local dhcpdDL.conf tftp nfsdir', or make anything_you_want.
+
+.\" ----------------------------------------------------------------------
+.SH Directories
+
+.\" ----------------------------------------------------------------------
+.SH Linux kernel and modules for diskless machines
+In this sample, I set them all enabled(Y), instead of (M)odule. You may want to
+disable some of them.
+
+CONFIG_IP_PNP, CONFIG_IP_PNP_DHCP, CONFIG_IP_PNP_BOOTP,
+CONFIG_SERIAL_CORE_CONSOLE,
+CONFIG_BLK_DEV_RAM, CONFIG_BLK_DEV_INITRD,
+CONFIG_PROC_FS, CONFIG_TMPFS, CONFIG_CRAMFS, CONFIG_NFS_FS, CONFIG_NFS_V3.
+
+Compiling your kernel and modules, make a bzip2-ed tar file of all modules.
+And set AufsKo, KVer, DLKernel and DLModTar in def.mk. DLModTar will be
+expanded into initrd by 'make initrd', and the aufs module(AufsKo) and the
+kernel (DLKernel) will be copied to tftp root dir by 'make tftp'.
+
+.\" ----------------------------------------------------------------------
+.SH Retrive and spool the packages
+The task preparing \*[IServer] may be repeated one, which includes retriving
+many
+packages and locally installing. Not to waste our time, these tasks are
+designed and implemented separately. Read the makefiles and try 'make retr'
+or 'make local'.
+
+Set DebVer, DebServer, DebComp and DebInstaller in def.mk. These variables
+specify which and where to get Debian packages. And DebPkgDir is the directory
+to keep the retrieved packages, DebPkgInfoDir is the directory to keep its
+information, such like the packages which are normal installer processes,
+respectively.
+
+.\" ----------------------------------------------------------------------
+.SH Local install and customize
+After retrieving packages, install them as a plain Debian system to the local
+directory specified by DLRoot in def.mk by 'make local'.
+The packages selected by a normal
+Debian installer will be installed automatically. If you want to add or remove
+some packages, set UninstPkg and InstPkg in def.mk.
+If you want to retrive some packages but do not want to install now, set
+RetrPkg.
+
+To let aufs work correctly, it is recommended to install /sbin/mount.aufs.
+In this sample, it should be installed under DLRoot. Set MountAufs in def.mk,
+to tell the makefile where mount.aufs exists.
+
+You will need to write some important files manually, such as /etc/fstab,
+/etc/hosts and so on. You can place them under 'ifiles' dir.
+'make local' copies all files under 'ifiles' to DLRoot.
+
+.SS custom.sh and preseed.sh
+Debian package have a nice feature called pre-configuretion or
+pre-seeding. The preseed.sh in this sample is a simple script which does
+nothing but preseeding. The local.sh script calls it a few times. You can
+modify preseed.sh as you like, to suit your environment.
+
+The custom.sh will be called from local.sh at the last stage of the
+local-install process. You can write anything in this script such as modifying
+some settings on the locally installed system.
+
+.\" ----------------------------------------------------------------------
+.SH Build initrd
+Linux kernel has a nice feature called initrd or linuxrc, which enables us a
+customization at boot time. In this sample, using this feature, mount NFS as
+aufs branches, build a union as a root filesystem, and execute pivot_root.
+
+A simple but powerful binary named busybox is commonly used in initrd. 'make
+initrd' in this sample retrieves busybox Debian package which is specified by
+BusyBoxPkg in def.mk, extract the binary and build a cramfs initrd image file.
+Also initrd should have some directories for aufs and its branches mount
+point. The branch direcotires should be specified by BranchDirs in def.mk.
+
+If you want to include some commands other than busybox, set InitrdExtCmd in
+def.mk. 'make initrd' will find the binary and the neccessary shared
+libraries on the running system, and then copy them into initrd image file.
+
+.SS linuxrc and comount.sh
+In this sample, linuxrc file is very simple since the actual mount process is
+executed in another script, called comount.sh. The linuxrc retrives aufs.ko
+and comount.sh via TFTP, and execute them.
+
+"make initrd tftp" will build the initrd file and copy it to the TFTP root
+directory.
+
+.\" ----------------------------------------------------------------------
+.SH Customize PXE, TFTP, DHCP and NFS server
+
+.SS tftp root
+Set TftpDir in def.mk. Installing and setting your TFTP server is out of this
+sample.
+
+.SS dhcpd.conf
+This sample has a tiny feature to generate dhcpd.conf. Write 'clients' table
+file which lists the hostname, ip address and mac address of your diskless
+machines, and set the filename to DhcpClients in def.mk.
+Other parts in complete dhcpd.conf should be described in another file, such
+as dhcpdDL.conf.in or dhcpd.conf.template, and and set the filename to
+DhcpDLConfIn in def.mk.
+"make dhcpd.conf" will generate the complete dhcpd.conf file. You can include
+this file from your system's configuration.
+Installing and setting your DHCP server is out of this sample.
+
+.SS pxelinux.0 and pxelinux.cfg/default
+Here is a sample file named 'pxe.conf' in this example, and it will be copied
+to TFTP dir by 'make tftp'. You can edit it anyway you like.
+
+The pxelinux.0 file under TFTP dir will be retrieved by PXE program in your
+diskless machines at its boot time. This file is extracted from the Debian
+installer. Probably you don't need to set DebInstaller in def.mk.
+
+.\" ----------------------------------------------------------------------
+.SH COPYRIGHT
+Copyright \(co 2006, 2007 Junjiro Okajima
+
+.SH AUTHOR
+Junjiro Okajima
+
+.\" Local variables: ;
+.\" mode: nroff;
+.\" End: ;
