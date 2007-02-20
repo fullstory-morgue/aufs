@@ -1,0 +1,41 @@
+#!/usr/bin/make -f
+
+PACKAGE := aufs-modules
+MA_DIR ?= /usr/share/modass
+-include $(MA_DIR)/include/generic.make
+-include $(MA_DIR)/include/common-rules.make
+
+kmod := aufs.ko
+
+.PHONY: kdist_config
+kdist_config: prep-deb-files
+
+.PHONY: binary-modules
+binary-modules: kdist_config
+	dh_testdir
+	dh_testroot
+	dh_clean -k
+	
+	# Build modules
+	$(MAKE) -f local.mk $(kmod) KDIR=$(KSRC)
+	
+	# Install modules
+	dh_installdirs		lib/modules/$(KVERS)/kernel/fs/aufs/
+	dh_install $(kmod)	lib/modules/$(KVERS)/kernel/fs/aufs/
+	
+	dh_installdocs
+	dh_installchangelogs
+	dh_compress
+	dh_fixperms
+	dh_installmodules
+	dh_installdeb
+	dh_gencontrol -- -v$(VERSION)
+	dh_md5sums
+	dh_builddeb --destdir=$(DEB_DESTDIR)
+
+.PHONY: kdist_clean
+kdist_clean:
+	dh_testdir
+	dh_testroot
+	dh_clean
+	$(MAKE) -f local.mk clean KDIR=$(KSRC)

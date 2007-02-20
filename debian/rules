@@ -1,0 +1,24 @@
+#!/usr/bin/make -f
+  
+include /usr/share/cdbs/1/rules/debhelper.mk
+
+install/aufs-source::
+	# Enforce executable bit on debian/rules, and create directory 
+	# structure for modules source
+	install -D -m 0755 debian/rules.modules \
+		debian/tmp/modules/aufs/debian/rules
+	
+	# Prepare the other debian stuff
+	for f in *.modules.in control compat copyright changelog; do \
+		install -m 0644 debian/$$f \
+			debian/tmp/modules/aufs/debian/; \
+	done
+	
+	# Prepare upstream source
+	find . -path ./debian/\* -type d -prune -o -printf "%P\n" | \
+		egrep 'fs|include|*.mk' | \
+		cpio -admp debian/tmp/modules/aufs/
+	
+	# Prepare the debian source tarball
+	tar jcf debian/aufs-source/usr/src/aufs.tar.bz2 \
+		-C debian/tmp modules
