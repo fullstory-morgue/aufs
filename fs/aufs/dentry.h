@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: dentry.h,v 1.18 2007/02/05 01:45:22 sfjro Exp $ */
+/* $Id: dentry.h,v 1.21 2007/03/19 04:31:31 sfjro Exp $ */
 
 #ifndef __AUFS_DENTRY_H__
 #define __AUFS_DENTRY_H__
@@ -54,6 +54,7 @@ struct aufs_dinfo {
 	SiMustAnyLock((d)->d_sb); \
 	RwMustAnyLock(&dtodi(d)->di_rwsem); \
 	} while(0)
+#define DiMustNoWaiters(d)	RwMustNoWaiters(&dtodi(d)->di_rwsem)
 
 #define digen(d)	atomic_read(&dtodi(d)->di_generation)
 
@@ -76,35 +77,72 @@ struct aufs_dinfo {
 #define direval_dec(d)	({d;})
 #endif
 
+struct lkup_args {
+	struct vfsmount *nfsmnt;
+	int dlgt;
+	//struct super_block *sb;
+};
+
 /* ---------------------------------------------------------------------- */
 
-extern struct dentry_operations aufs_dop;
 #ifdef CONFIG_AUFS_LHASH_PATCH
-struct vfsmount *mnt_nfs(struct super_block *sb, aufs_bindex_t bindex);
+/* it doesn't mntget() */
+#define mnt_nfs(sb, bindex)	do_mnt_nfs(sbr_mnt(sb, bindex))
 struct dentry *lkup_one(const char *name, struct dentry *parent, int len,
-			struct vfsmount *mnt);
+			struct lkup_args *lkup);
 #else
-#define mnt_nfs(sb,i)		NULL
-#define lkup_one(n,p,l,m)	lookup_one_len(n,p,l)
+#define mnt_nfs(sb, i)		NULL
+#ifdef CONFIG_AUFS_DLGT
+struct dentry *lkup_one(const char *name, struct dentry *parent, int len,
+			struct lkup_args *lkup);
+#else
+static inline
+struct dentry *lkup_one(const char *name, struct dentry *parent, int len,
+			struct lkup_args *lkup)
+{
+	return lookup_one_len(name, parent, len);
+}
 #endif
+#endif
+
+extern struct dentry_operations aufs_dop;
 struct dentry *sio_lkup_one(const char *name, struct dentry *parent, int len,
-			    struct vfsmount *mnt);
+			    struct lkup_args *lkup);
 int lkup_dentry(struct dentry *dentry, aufs_bindex_t bstart, mode_t type);
 int lkup_neg(struct dentry *dentry, aufs_bindex_t bindex);
-int refresh_hdentry(struct dentry *dentry, mode_t type);
-int reval_dpath(struct dentry *dentry, int sgen);
+int au_refresh_hdentry(struct dentry *dentry, mode_t type);
+int au_reval_dpath(struct dentry *dentry, int sgen);
 
 //dinfo.c
-int alloc_dinfo(struct dentry *dentry);
+int au_alloc_dinfo(struct dentry *dentry);
 struct aufs_dinfo *dtodi(struct dentry *dentry);
 
-void di_read_lock(struct dentry *d, int flags);
+void di_read_lock(struct dentry *d, int flags, unsigned int lsc);
 void di_read_unlock(struct dentry *d, int flags);
 void di_downgrade_lock(struct dentry *d, int flags);
-void di_write_lock(struct dentry *d);
+void di_write_lock(struct dentry *d, unsigned int lsc);
 void di_write_unlock(struct dentry *d);
-void di_write_lock2(struct dentry *d1, struct dentry *d2, int isdir);
+void di_write_lock2_child(struct dentry *d1, struct dentry *d2, int isdir);
+void di_write_lock2_parent(struct dentry *d1, struct dentry *d2, int isdir);
 void di_write_unlock2(struct dentry *d1, struct dentry *d2);
+
+#define di_read_lock_child(d, f)	di_read_lock(d, f, AUFS_LSC_DINFO_CHILD)
+#define di_write_lock_child(d)		di_write_lock(d, AUFS_LSC_DINFO_CHILD)
+#define di_read_lock_child2(d, f) \
+	di_read_lock(d, f, AUFS_LSC_DINFO_CHILD2)
+#define di_write_lock_child2(d)		di_write_lock(d, AUFS_LSC_DINFO_CHILD2)
+#define di_read_lock_child3(d, f) \
+	di_read_lock(d, f, AUFS_LSC_DINFO_CHILD3)
+#define di_write_lock_child3(d)		di_write_lock(d, AUFS_LSC_DINFO_CHILD3)
+
+#define di_read_lock_parent(d, f)	di_read_lock(d, f,AUFS_LSC_DINFO_PARENT)
+#define di_write_lock_parent(d)		di_write_lock(d, AUFS_LSC_DINFO_PARENT)
+#define di_read_lock_parent2(d, f) \
+	di_read_lock(d, f, AUFS_LSC_DINFO_PARENT2)
+#define di_write_lock_parent2(d)	di_write_lock(d, AUFS_LSC_DINFO_PARENT2)
+#define di_read_lock_parent3(d, f) \
+	di_read_lock(d, f, AUFS_LSC_DINFO_PARENT3)
+#define di_write_lock_parent3(d)	di_write_lock(d, AUFS_LSC_DINFO_PARENT3)
 
 aufs_bindex_t dbstart(struct dentry *dentry);
 aufs_bindex_t dbend(struct dentry *dentry);
@@ -125,9 +163,9 @@ void hdput(struct aufs_hdentry *hdentry);
 void set_h_dptr(struct dentry *dentry, aufs_bindex_t bindex,
 		struct dentry *h_dentry);
 
-void update_digen(struct dentry *dentry);
-void update_dbstart(struct dentry *dentry);
-int find_dbindex(struct dentry *dentry, struct dentry *h_dentry);
+void au_update_digen(struct dentry *dentry);
+void au_update_dbstart(struct dentry *dentry);
+int au_find_dbindex(struct dentry *dentry, struct dentry *h_dentry);
 
 #endif /* __KERNEL__ */
 #endif /* __AUFS_DENTRY_H__ */

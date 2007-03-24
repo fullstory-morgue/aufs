@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: opts.c,v 1.25 2007/02/19 03:29:11 sfjro Exp $ */
+/* $Id: opts.c,v 1.28 2007/03/19 04:32:35 sfjro Exp $ */
 
 #include <asm/types.h> // a distribution requires
 #include <linux/parser.h>
@@ -25,6 +25,7 @@
 enum {
 	Opt_br,
 	Opt_add, Opt_del, Opt_mod, Opt_append, Opt_prepend,
+	Opt_idel, Opt_imod,
 	Opt_dirwh, Opt_rdcache, Opt_deblk, Opt_nhash,
 	Opt_xino, Opt_zxino, Opt_noxino,
 	Opt_plink, Opt_noplink, Opt_list_plink, Opt_clean_plink,
@@ -33,7 +34,7 @@ enum {
 	Opt_warn_perm, Opt_nowarn_perm,
 	Opt_findrw_dir, Opt_findrw_br,
 	Opt_coo,
-	Opt_ipriv, Opt_noipriv,
+	Opt_dlgt, Opt_nodlgt,
 	Opt_tail, Opt_ignore, Opt_err
 };
 
@@ -52,8 +53,10 @@ static match_table_t options = {
 
 	{Opt_del, "del=%s"},
 	{Opt_del, "del:%s"},
+	{Opt_idel, "idel:%d"},
 	{Opt_mod, "mod=%s"},
 	{Opt_mod, "mod:%s"},
+	{Opt_imod, "imod:%d:%s"},
 
 	{Opt_dirwh, "dirwh=%d"},
 	{Opt_dirwh, "dirwh:%d"},
@@ -87,9 +90,9 @@ static match_table_t options = {
 
 	{Opt_coo, "coo=%s"},
 
-#if 0 //def CONFIG_AUFS_IPRIV_PATCH
-	{Opt_ipriv, "ipriv"},
-	{Opt_noipriv, "noipriv"},
+#ifdef CONFIG_AUFS_DLGT
+	{Opt_dlgt, "dlgt"},
+	{Opt_nodlgt, "nodlgt"},
 #endif
 
 	{Opt_rdcache, "rdcache=%d"},
@@ -199,7 +202,7 @@ int br_perm_str(char *p, int len, unsigned int perm)
 
 static match_table_t udbalevel = {
 	{MS_UDBA_REVAL, "reval"},
-#ifdef CONFIG_AUFS_HINOTIFY
+#if defined(CONFIG_AUFS_HINOTIFY) && !defined(CONFIG_AUFS_DEBUG_RWSEM)
 	{MS_UDBA_INOTIFY, "inotify"},
 #endif
 	{MS_UDBA_NONE, "none"},
@@ -266,6 +269,8 @@ static void coo_set(struct super_block *sb, unsigned int flg)
 
 /* ---------------------------------------------------------------------- */
 
+static const int lkup_dirflags = LOOKUP_FOLLOW | LOOKUP_DIRECTORY;
+
 #ifdef CONFIG_AUFS_DEBUG
 static void dump_opts(struct opts *opts)
 {
@@ -289,10 +294,12 @@ static void dump_opts(struct opts *opts)
 				  add->nd.dentry);
 			break;
 		case Opt_del:
+		case Opt_idel:
 			del = &opt->del;
 			LKTRTrace("del {%s, %p}\n", del->path, del->h_root);
 			break;
 		case Opt_mod:
+		case Opt_imod:
 			mod = &opt->mod;
 			LKTRTrace("mod {%s, 0x%x, %p}\n",
 				  mod->path, mod->perm, mod->h_root);
@@ -346,11 +353,11 @@ static void dump_opts(struct opts *opts)
 		case Opt_nowarn_perm:
 			LKTRLabel(nowarn_perm);
 			break;
-		case Opt_ipriv:
-			LKTRLabel(ipriv);
+		case Opt_dlgt:
+			LKTRLabel(dlgt);
 			break;
-		case Opt_noipriv:
-			LKTRLabel(noipriv);
+		case Opt_nodlgt:
+			LKTRLabel(nodlgt);
 			break;
 		case Opt_coo:
 			LKTRTrace("coo %d, %s\n", opt->coo, coo_str(opt->coo));
@@ -383,9 +390,11 @@ void free_opts(struct opts *opts)
 			path_release(&opt->add.nd);
 			break;
 		case Opt_del:
+		case Opt_idel:
 			dput(opt->del.h_root);
 			break;
 		case Opt_mod:
+		case Opt_imod:
 			dput(opt->mod.h_root);
 			break;
 		}
@@ -422,9 +431,9 @@ static int opt_add(struct opt *opt, char *opt_str, struct super_block *sb,
 		}
 	}
 
-	// todo: ignore LSM
+	// LSM may detect it
 	// do not superio.
-	err = path_lookup(add->path, LOOKUP_FOLLOW, &add->nd);
+	err = path_lookup(add->path, lkup_dirflags, &add->nd);
 	//err = -1;
 	if (!err) {
 		opt->type = Opt_add;
@@ -469,8 +478,8 @@ int parse_opts(struct super_block *sb, char *str, struct opts *opts,
 		char *p;
 		err = -EINVAL;
 		token = match_token(opt_str, options, args);
-		LKTRTrace("%s, token %d, args[0]{%p, %p}, err=%d\n",
-			  opt_str, token, args[0].from, args[0].to, Opt_err);
+		LKTRTrace("%s, token %d, args[0]{%p, %p}\n",
+			  opt_str, token, args[0].from, args[0].to);
 
 		skipped = 0;
 		switch (token) {
@@ -506,9 +515,9 @@ int parse_opts(struct super_block *sb, char *str, struct opts *opts,
 			del = &opt->del;
 			del->path = args[0].from;
 			LKTRTrace("del path %s\n", del->path);
-			// todo: ignore LSM
+			// LSM may detect it
 			// do not superio.
-			err = path_lookup(del->path, LOOKUP_FOLLOW, &nd);
+			err = path_lookup(del->path, lkup_dirflags, &nd);
 			if (unlikely(err)) {
 				Err("lookup failed %s (%d)\n", del->path, err);
 				break;
@@ -517,6 +526,28 @@ int parse_opts(struct super_block *sb, char *str, struct opts *opts,
 			path_release(&nd);
 			opt->type = token;
 			break;
+#if 0
+		case Opt_idel:
+			del = &opt->del;
+			del->path = "(indexed)";
+			if (unlikely(match_int(&args[0], &n))) {
+				Err("bad integer in %s\n", opt_str);
+				break;
+			}
+			bindex = n;
+			aufs_read_lock(root, !AUFS_I_RLOCK);
+			if (bindex < 0 || sbend(sb) < bindex) {
+				Err("out of bounds, %d\n", bindex);
+				aufs_read_unlock(root, !AUFS_I_RLOCK);
+				break;
+			}
+			err = 0;
+			del->h_root = dget(h_dptr_i(root, bindex));
+			opt->type = token;
+			aufs_read_unlock(root, !AUFS_I_RLOCK);
+			break;
+#endif
+
 		case Opt_mod:
 			mod = &opt->mod;
 			mod->path = args[0].from;
@@ -533,9 +564,9 @@ int parse_opts(struct super_block *sb, char *str, struct opts *opts,
 				Err("bad permssion %s\n", p);
 				break;
 			}
-			// todo: ignore LSM
+			// LSM may detect it
 			// do not superio.
-			err = path_lookup(mod->path, LOOKUP_FOLLOW, &nd);
+			err = path_lookup(mod->path, lkup_dirflags, &nd);
 			if (unlikely(err)) {
 				Err("lookup failed %s (%d)\n", mod->path, err);
 				break;
@@ -544,6 +575,35 @@ int parse_opts(struct super_block *sb, char *str, struct opts *opts,
 			path_release(&nd);
 			opt->type = token;
 			break;
+#if 0
+		case Opt_imod:
+			mod = &opt->mod;
+			mod->path = "(indexed)";
+			if (unlikely(match_int(&args[0], &n))) {
+				Err("bad integer in %s\n", opt_str);
+				break;
+			}
+			bindex = n;
+			aufs_read_lock(root, !AUFS_I_RLOCK);
+			if (bindex < 0 || sbend(sb) < bindex) {
+				Err("out of bounds, %d\n", bindex);
+				aufs_read_unlock(root, !AUFS_I_RLOCK);
+				break;
+			}
+			mod->perm = br_perm_val(args[1].from);
+			LKTRTrace("mod path %s, perm 0x%x, %s\n",
+				  mod->path, mod->perm, args[1].from);
+			if (!mod->perm) {
+				Err("bad permssion %s\n", args[1].from);
+				aufs_read_unlock(root, !AUFS_I_RLOCK);
+				break;
+			}
+			err = 0;
+			mod->h_root = dget(h_dptr_i(root, bindex));
+			opt->type = token;
+			aufs_read_unlock(root, !AUFS_I_RLOCK);
+			break;
+#endif
 
 		case Opt_xino:
 			skipped = 1;
@@ -598,8 +658,8 @@ int parse_opts(struct super_block *sb, char *str, struct opts *opts,
 		case Opt_diropq_w:
 		case Opt_warn_perm:
 		case Opt_nowarn_perm:
-		case Opt_ipriv:
-		case Opt_noipriv:
+		case Opt_dlgt:
+		case Opt_nodlgt:
 			err = 0;
 			opt->type = token;
 			break;
@@ -669,9 +729,9 @@ int do_opts(struct super_block *sb, struct opts *opts, int remount)
 
 	/* disable inotify temporary */
 	udba = IS_MS(sb, MS_UDBA_MASK);
-	if (unlikely(udba == MS_UDBA_INOTIFY)) {
+	if (unlikely(udba == MS_UDBA_INOTIFY && ibend(dir) >= 0)) {
 		udba_set(sb, MS_UDBA_NONE);
-		reset_hinotify(dir, hi_flags(dir, 1) & ~AUFS_HI_XINO);
+		au_reset_hinotify(dir, au_hi_flags(dir, 1) & ~AUFS_HI_XINO);
 	}
 
 	err = 0;
@@ -689,9 +749,11 @@ int do_opts(struct super_block *sb, struct opts *opts, int remount)
 			err = br_add(sb, &opt->add, remount);
 			break;
 		case Opt_del:
+		case Opt_idel:
 			err = br_del(sb, &opt->del, remount);
 			break;
 		case Opt_mod:
+		case Opt_imod:
 			err = br_mod(sb, &opt->mod, remount);
 			break;
 		case Opt_append:
@@ -720,16 +782,16 @@ int do_opts(struct super_block *sb, struct opts *opts, int remount)
 			break;
 		case Opt_noplink:
 			if (IS_MS(sb, MS_PLINK))
-				put_plink(sb);
+				au_put_plink(sb);
 			MS_CLR(sb, MS_PLINK);
 			break;
 		case Opt_list_plink:
 			if (IS_MS(sb, MS_PLINK))
-				list_plink(sb);
+				au_list_plink(sb);
 			break;
 		case Opt_clean_plink:
 			if (IS_MS(sb, MS_PLINK))
-				put_plink(sb);
+				au_put_plink(sb);
 			break;
 
 		case Opt_udba:
@@ -751,11 +813,11 @@ int do_opts(struct super_block *sb, struct opts *opts, int remount)
 			MS_CLR(sb, MS_WARN_PERM);
 			break;
 
-		case Opt_ipriv:
-			MS_SET(sb, MS_IPRIVATE);
+		case Opt_dlgt:
+			MS_SET(sb, MS_DLGT);
 			break;
-		case Opt_noipriv:
-			MS_CLR(sb, MS_IPRIVATE);
+		case Opt_nodlgt:
+			MS_CLR(sb, MS_DLGT);
 			break;
 
 		case Opt_coo:
@@ -776,8 +838,8 @@ int do_opts(struct super_block *sb, struct opts *opts, int remount)
 
 	udba_set(sb, udba);
 	/* AUFS_HI_XINO will be handled later */
-	if (unlikely(udba == MS_UDBA_INOTIFY))
-		reset_hinotify(dir, hi_flags(dir, 1) & ~AUFS_HI_XINO);
+	if (unlikely(udba == MS_UDBA_INOTIFY && ibend(dir) >= 0))
+		au_reset_hinotify(dir, au_hi_flags(dir, 1) & ~AUFS_HI_XINO);
 
  out:
 	TraceErr(err);

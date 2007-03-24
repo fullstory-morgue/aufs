@@ -2,15 +2,15 @@
 Aufs -- Another Unionfs
 Junjiro Okajima
 
-# $Id: README,v 1.37 2007/02/19 03:25:25 sfjro Exp $
+# $Id: README,v 1.41 2007/03/19 04:34:07 sfjro Exp $
 
 
 0. Introduction
 ----------------------------------------
 In the early days, aufs was entirely re-designed and re-implemented
-Unionfs. After many original ideas, approaches, improvements and
-implementations, it becomes totally different from Unionfs while keeping the
-basic features.
+Unionfs Version 1.x series. After many original ideas, approaches,
+improvements and implementations, it becomes totally different from
+Unionfs while keeping the basic features.
 Unionfs is being developed by Professor Erez Zadok at Stony Brook
 University and his team.
 If you don't know Unionfs, I recommend you to try and know it before
@@ -59,17 +59,20 @@ Aufs is in still development stage, especially,,,
   including NFS or remote filesystem branch.
 
 (current work)
-- support Linux Security Modules (LSM)
 - export via NFS.
+- /sys/fs/aufs.
+- support Linux Security Modules (LSM), mainly for Suse AppArmor.
 - nested mount, i.e. aufs as readonly no-whiteout branch of another aufs.
-- /sys/fs/aufs/mtab and /proc/mounts. (after linux-2.6.18)
 
 (just an idea)
+- sample for kvm, xen, vmware and openvz? If a directory can be
+  sharable between several Guest-OSes, to share readonly aufs branches
+  will be an advantage.
 - remount option copy/move between two branches. (unnecessary?)
 - O_DIRECT (unnecessary?)
 - light version, without branch manipulation. (unnecessary?)
 - SMP, because I don't have such machine.
-- 64 bits environment, because I don't have such machine.
+- 64bit environment, because I don't have such machine.
 - xattr, acl
 - disk quota (unnecessary?)
 - and documentation
@@ -105,6 +108,7 @@ join this ML.
 When you have any problems or strange behaviour in aufs, please let me
 know with,,,
 - /proc/mounts (instead of the output of mount(8))
+- /sys/fs/aufs/* (if you have them)
 - linux kernel version
 - AUFS_VERSION (defined in include/linux/aufs_type.h)
 - configuration (define/undefine CONFIG_AUFS_xxx, or plain local.mk is
@@ -120,6 +124,11 @@ Feature Requests) on SourceForge. Please join and write to aufs-users ML.
 4. Configuration and Compilation
 ----------------------------------------
 Aufs is being developed and tested on linux-2.6.16 and later.
+You need the correct environment to build a kernel module. Generally
+it is an environment which your kernel was built.
+If you are unsure that you got the correct environment, then I
+recommend you to built your kernel by yourself. If it succeeds, you've
+got the correct environment.
 
 o CONFIG_DEBUG_PROVE_LOCKING (in linux kernel)
 If you enable CONFIG_DEBUG_PROVE_LOCKING in your linux kernel, you
@@ -149,13 +158,6 @@ aufs module.
 If you don't want to change the ./local.mk, then create a new file
 ./priv_def.mk and write the definitions your aufs configuration. The
 ./local.mk includes ./priv_def.mk.
-
-Some users contributed the patches against fs/Kconfig and fs/Makefile. Thank
-you very much. While they are not included in CVS tree, they may help you. You
-can find them at,
-- 'Patches' on SourceForge aufs public place, while I don't usually go there.
-  and post on 23 Oct 2006 to aufs-users at lists.sourceforge.net ML.
-- post on 12 Jan 2007 to the ML.
 
 
 5. Usage
@@ -193,7 +195,7 @@ network booting. See ./sample in detail.
 ----------------------------------------
 If you are an experienced user, no explanation is needed. Aufs is
 just a linux filesystem module. take a glance at ./local.mk,
-aufs.in.5, and Unionfs.
+aufs.5, and Unionfs.
 
 
 Enjoy!

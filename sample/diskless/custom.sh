@@ -18,7 +18,7 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
-# $Id: custom.sh,v 1.2 2007/01/08 01:58:41 sfjro Exp $
+# $Id: custom.sh,v 1.3 2007/03/12 01:54:55 sfjro Exp $
 
 set -e
 tmp=/tmp/$$
@@ -64,9 +64,9 @@ awk '
 }
 /^mount -n -o remount,ro \// {
 	print "umount /initrd/branch";
-	print "echo -n Flushing aufs pseudo-links...";
-	print "auplink / flush";
-	print "echo done.";
+	print "#echo -n Flushing aufs pseudo-links...";
+	print "#auplink / flush";
+	print "#echo done.";
 	sub(/^mount -n/, "mount -in");
 }
 {print}

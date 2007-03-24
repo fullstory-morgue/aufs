@@ -9,7 +9,7 @@ aufs \- another unionfs. version \*[AUFS_VERSION]
 Aufs is a stackable unification filesystem such as Unionfs, which unifies
 several directories and provides a merged single directory.
 In the early days, aufs was entirely re-designed and re-implemented
-Unionfs. After
+Unionfs Version 1.x series. After
 many original ideas, approaches and improvements, it
 becomes totally different from Unionfs while keeping the basic features.
 See Unionfs for the basic features.
@@ -179,44 +179,31 @@ branch. The default is warn_perm (cf. DIAGNOSTICS).
 .\" The default is 'coo=none'.
 .\" .
 .\" .TP
-.\" .B ipriv noipriv
+.\" .B dlgt nodlgt
 .\" When you define CONFIG_SECURITY and use any type of Linux Security Module
 .\" (LSM), for example SUSE AppArmor, you may or may not meet some errors or
 .\" warnings from your security module. Because aufs access its branches
-.\" internally, your security module may detect, report, or stop it.
+.\" internally, your security module may detect, report, or prohibit it.
 .\" The behaviour is highly depending upon your security module and its
 .\" configuration.
-.\" Linux kernel has a flag to address this situation. It is called S_PRIVATE flag
-.\" in inode. When this flag is set, LSM will stop calling the security modules on
-.\" the inode.
-.\" If CONFIG_SECURITY was enabled and ipriv mount option was specified,
-.\" aufs sets this flag when accessing its branches internally. Finishing the
-.\" operation, aufs reset this flag.
 .\" 
-.\" Currently, aufs does NOT use S_PRIVATE at mount and remount time. It is
-.\" recommended to be super-user when you mount or remount aufs and set your
-.\" LSM to ignore super-user.
+.\" If you don't want your application to access your branches or to be
+.\" traced strictly by task I/O accounting, you can
+.\" use the kernel threads in aufs. If you enable CONFIG_AUFS_DLGT and
+.\" specify 'dlgt' mount option, then
+.\" aufs delegates its internal
+.\" access to the branches to the kernel threads and your LSM will see the
+.\" aufs kernel thread is accessing ot the aufs branch instead of your
+.\" application.
 .\" 
-.\" The default is noipriv which means that aufs never set/reset S_PRIVATE flag.
+.\" The delegation may damage the performance since it includes
+.\" task-switch (scheduling) and waits for the thread to complete the
+.\" delegated access. You should consider increasing the number of the
+.\" kernel thread specifying the aufs module parameter 'nwkq.'
 .\" 
-.\" Not all of kernel functions supports S_PRIVATE flag. For example, readdir(2)
-.\" and statfs(2) don't support it. So when your LSM supports these
-.\" operations and you use them from aufs, your LSM will be called
-.\" and do something.
-.\" Again, the behaviour is highly depending upon your security module and its
-.\" configuration.
-.\" 
-.\" Additionally, there are several problems in handling S_PRIVATE flag.
-.\" 
-.\" During S_PRIVATE flag is set by aufs, someone else might set S_PRIVATE flag.
-.\" In this case, aufs cannot detect it and will clear it unexpectedly.
-.\" 
-.\" During S_PRIVATE flag is set by aufs, the inode might be saved to disk.
-.\" In this case, aufs tries detecting the inode was saved and making the inode
-.\" dirty again. But it never guarantee that the inode will be saved again.
-.\" When the system crashes before aufs resets S_PRIVATE flag and after the inode
-.\" was saved, users should repair the unexpectedly saved S_PRIVATE flag manually
-.\" after reboot.
+.\" Currently, aufs does NOT delegate it at mount and remount time.
+.\" The default is nodlgt which means aufs doesn't delegate the internal
+.\" access.
 
 .\" ----------------------------------------------------------------------
 .SH Module parameters
@@ -232,10 +219,34 @@ The special I/O requests from aufs include a part of copy-up, lookup,
 directory handling, pseudo-link and xino file operations.
 For example, Unix filesystems allow you to rmdir(2) which has no write
 permission bit, if its parent directory has write permission bit. In aufs, the
-removing direcoty may or may not have whiteout or 'dir opaque' mark as its
+removing directory may or may not have whiteout or 'dir opaque' mark as its
 child. And aufs needs to unlink(2) them before rmdir(2).
 Therefore aufs delegates the actual unlink(2) and rmdir(2) to another kernel
 thread which has been created already and has a superuser privilege.
+
+.\" If you enable CONFIG_AUFS_SYSAUFS, you can check this value through
+.\" <sysfs>/fs/aufs/nwkq.
+.\" .
+.\" .TP
+.\" .B brs=1 | 0
+.\" Specifies to use <sysfs>/fs/aufs/brs or not.
+.\" 
+.\" If the number of your branches is large or their path is long
+.\" and you meet the limitation of mount(8), /etc/mtab or
+.\" /proc/mount, you need to enable CONFIG_AUFS_SYSAUFS and set aufs
+.\" module parameter brs=1.
+.\" 
+.\" When this parameter is set as 1, aufs doesn't show 'br:' (or dirs=)
+.\" mount option through /proc/mounts, and /sbin/mount.aufs doesn't put it
+.\" to /etc/mtab. So you can keep yourself from the page limitation of
+.\" mount(8), /etc/mtab and /proc/mounts.
+.\" Aufs shows 'br:' option through <sysfs>/fs/aufs/brs.
+.\" 
+.\" The default is brs=0, which means <sysfs>/fs/aufs/brs does not exist
+.\" and 'br:' option will appear in /proc/mounts and /etc/mtab if you
+.\" install /sbin/mount.aufs.
+.\" If you didn't enable CONFIG_AUFS_SYSAUFS, this parameter will be
+.\" ignored.
 
 .\" ----------------------------------------------------------------------
 .SH Branch Syntax
@@ -281,7 +292,11 @@ will be \*[AUFS_XINO_DEFPATH].
 A user who executes mount(8) needs the privilege to create xino
 file.
 
-Those files are always opened and read/write by aufs frequently. The
+Those files are always opened and read/write by aufs frequently.
+If your writable branch is on flash memory device, it is recommended
+to put xino files on other than flash memory by specifing 'xino='
+monut option.
+The
 maximum file size will be 'max inode number on the branch x size of an
 inode number'. For example, on a 32bit system,
 
@@ -594,6 +609,7 @@ about the file will be discarded and aufs re-lookup. So the data will
 be updated.
 To use this option, you need linux-2.6.18 and later, and need to
 enable CONFIG_INOTIFY and CONFIG_AUFS_UDBA_INOTIFY.
+When CONFIG_AUFS_DEBUG_RWSEM is enabled, this option cannot be used.
 
 .\" ----------------------------------------------------------------------
 .SH Linux Inotify Limitation
@@ -631,23 +647,54 @@ incorrect data about the file/dir.
 
 .\" ----------------------------------------------------------------------
 .\" .SH Exporting aufs via NFS
-.\" Aufs is supporting NFS-exporting.
+.\" Aufs is supporting NFS-exporting in linux-2.6.18 and later.
 .\" Since aufs has no actual block device, you need to add NFS 'fsid' option at
-.\" exporting. Refer to the manaul of NFS about the detail of this option.
+.\" exporting. Refer to the manual of NFS about the detail of this option.
 .\" 
-.\" Additionally, there are several limitations.
-.\" .\" .RS
+.\" It is recommended to export your branch filesystems once before
+.\" exporting aufs. By exporting once, the branch filesystem internal
+.\" pointer named find_exported_dentry is initialized. After this
+.\" initialization, you may unexport them.
+.\" Additionally, this initialization should be done per the
+.\" filesystem type. If your branches are all the same filesystem
+.\" type, you need to export just one of them once.
+.\" If you have never export a filesystem which is used in your
+.\" braches, aufs will initialize the internal pointer by the default
+.\" value, and produce a
+.\" warning. While it will work correctly, I am afraid it will be unsafe
+.\" in the future.
+.\" 
+.\" Additionally, there are several limitations or requirements.
+.\" .RS
 .\" .IP \(bu 4
-.\" NFSv2 is not suppported. When you mount from your NFS client, you will need to
-.\" some NFS options, expecially it is nfsroot.
+.\" The version of linux kernel must be linux-2.6.18 or later.
 .\" .IP \(bu 4
-.\" The branch filesystem must support iget().
+.\" You need to enable CONFIG_AUFS_EXPORT.
 .\" .IP \(bu 4
-.\" The branch filesystem must have "." and ".." in a directory.
+.\" The branch filesystem must support NFS-exporting. For example, tmpfs in
+.\" linux-2.6.18 (or earlier) doesn't support it.
 .\" .IP \(bu 4
-.\" The branch filesystem should maintain inode.i_version. Currently VFS
-.\" handles it.
-.\" .\" .RE
+.\" NFSv2 is not supported. When you mount the exported aufs from your NFS
+.\" client, you will need to some NFS options like v3 or nfsvers=v3,
+.\" especially if it is nfsroot.
+.\" .IP \(bu 4
+.\" If the NFS file handle of your branch filesystem is large, aufs will
+.\" not be able to handle it. The maximum size of NFSv3 file
+.\" handle for a filesystem is 64 bytes. Aufs uses 24 bytes for 32bit
+.\" system, plus 12 bytes for 64bit system. The rest is a rootm for a file
+.\" handle of a branch filesystem.
+.\" .IP \(bu 4
+.\" The 'xino' mount option is required since NFS file handle is
+.\" based upon inode number.
+.\" .IP \(bu 4
+.\" The 'noplink' option is recommended.
+.\" .IP \(bu 4
+.\" If you add/del branches many times between the accesses to the same file
+.\" from the same NFS client,
+.\" and the number of the add/del operation is greater than the maximum
+.\" number of branches, then aufs may not handle the request from the NFS
+.\" client correctly.
+.\" .RE
 
 .\" ----------------------------------------------------------------------
 .SH Dentry and Inode Caches
@@ -671,7 +718,16 @@ branch permission flag are available. They are interpreted as
 br: option and =ro flags respectively.
  'debug', 'delete', 'imap' options are ignored silently. When you
 compile aufs without -DCONFIG_AUFS_COMPAT, these three options are
-also ignored, but warning message is issued.
+also ignored, but a warning message is issued.
+
+Ignoring 'delete' option, and to keep filesystem consistency, aufs tries
+writing something to only one branch in a single systemcall. It means
+aufs may copyup even if the copyup-src branch is specified as writable.
+For exmaple, you have two writable branches and a large regular file
+on the lower writable branch. When you issue rename(2) to the file on aufs,
+aufs may copyup it to the higher writable branch.
+If this behaviour is not what you want, then you should rename(2) it
+on the lower branch directly.
 
 And there is a simple shell
 script 'unionctl' which is compatible with unionctl(8) in
@@ -863,9 +919,9 @@ different uid/gid/permission, /ro
 .\" will not.
 .\" And the next example shows the modifications to the files under /rw branch
 .\" will be copied-up to /new/a.
-.\" 
+.\"
 .\" Todo: test multiple writable branches policy. cpup=nearest, cpup=exist_parent.
-.\" 
+.\"
 .\" .nf
 .\" # mount -v -t aufs br:/rw:/ro none /u
 .\" none on /u type aufs (rw,xino=/rw/.aufs.xino,br:/rw=rw:/ro=ro)
@@ -873,7 +929,7 @@ different uid/gid/permission, /ro
 .\" # mount -v -o remount,add:1:/new=rw /u
 .\" none on /u type aufs (rw,xino=/rw/.aufs.xino,br:/rw=rw:/new=rw:/ro=ro)
 .\" .fi
-.\" 
+.\"
 .\" .nf
 .\" # mount -v -t aufs br:/rw:/ro none /u
 .\" none on /u type aufs (rw,xino=/rw/.aufs.xino,br:/rw=rw:/ro=ro)

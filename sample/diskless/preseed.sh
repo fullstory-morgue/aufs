@@ -2,7 +2,7 @@
 
 # aufs sample -- diskless system
 
-# Copyright (C) 2006 Junjiro Okajima
+# Copyright (C) 2006, 2007 Junjiro Okajima
 #
 # This program, aufs is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -18,7 +18,7 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
-# $Id: preseed.sh,v 1.1 2006/12/22 06:08:56 sfjro Exp $
+# $Id: preseed.sh,v 1.2 2007/03/12 01:54:56 sfjro Exp $
 
 set -e
 trap "ret=\$?; test \$ret -ne 0 && echo $0 abend \$ret" 0

@@ -2,16 +2,79 @@
 History of aufs
 Junjiro Okajima
 
-# $Id: History,v 1.5 2007/02/19 03:53:42 sfjro Exp $
+# $Id: History,v 1.11 2007/03/20 07:31:02 sfjro Exp $
 
 Note:
 - the described date are all in JST.
 - CVS handles UTC as its timezone.
-- all these descriptions should be archived in the ML on sourceforge, since I
-  always post there and let users know. But sometimes archiving failed. this
-  is the main reason to begin writing this file.
+- all these descriptions should be archived in the ML on sourceforge,
+  since I always post there and let users know. But sometimes archiving
+  failed. this is the main reason to begin writing this file.
 
 ----------------------------------------------------------------------
+
+20070320
+- bugfix: brokn df(1)/statfs(2), wrong argument for vfs_statfs().
+
+20070319
+- bugfix: check the maximum number of branches, reported by Tomas M.
+- testing the inode number after the direct rename of a dir.
+- testing new mount option 'dlgt.'
+- testing lockdep.
+- add a new file vfsub.c
+- support O_LARGEFILE at copying-up a regular file, and opening a dir.
+- change some function signature and a global variable name in order
+  to avoid the symbol conflict, one of them was reported by Just Marc.
+	add_nlink(), alloc_dinfo(), alloc_whname(), copy_file(),
+	cpup_attr_all(), cpup_attr_changable(), cpup_attr_nlink(),
+	cpup_attr_timesizes(), dir_roflags, do_open(), file_roflags(),
+	fill_de(), fin_finfo(), fin_wkq(), find_brindex(),
+	find_dbindex(), flags_cpup(), free_whname(),
+	half_refresh_plink(), hi_flags(), iinfo_fin(), iinfo_init(),
+	init_finfo(), init_vdir(), init_wkq(), is_plinked(),
+	list_plink(), new_br_id(), put_plink(), ready_to_write(),
+	refresh_hdentry(), refresh_hinode(), reopen_nondir(),
+	reset_hinotify(), reval_and_lock_finfo(), reval_dpath(),
+	show_br(), sigen(), sigen_inc(), sub_nlink(),
+	test_empty_lower(), test_perm(), unlink_wh_dentry(),
+	update_brange(), update_dbstart(), update_digen(), update_figen().
+
+20070312
+- gave up handling inode S_PRIVATE flag and supporting LSM generally.
+- minor optimization by LOOKUP_DIRECTORY flag.
+- testing NFS-exporting.
+- still testing lockdep.
+- still testing sysfs.
+- add samples for LiveCD over NFS.
+- add a note suggested by Simon Sasburg.
+
+20070305
+- support copyup a 'tail-hole'ed sparse file.
+- still testing lockdep.
+- still testing sysfs.
+
+20070226
+- bugfix: mis-judging the maximum number of branches.
+- bugfix: branch index at '--add --before path', reported and fixed by
+  Fernando A. P. Gomes.
+- refine inotify, a test finished.
+- still testing LSM.
+- begin testing with lockdep, still testing.
+- begin supporting sysfs, still testing.
+- refine the maximum number of branches.
+- add a caution about AUFS_HINOTIFY and AUFS_DEBUG_RWSEM.
+- refine copyup pseudo-link, remove cpup_pseudo_link() function.
+- refine copyup pseudo-link, call test_and_cpup_dirs() and
+  sio_cpup_simple() instead of cpup_pseudo_link().
+- refine copyup pseudo-link, a new function lkup_plink().
+- refine new_inode(), call iget_locked() instead of iget() and test
+  I_NEW.
+- minor optimization, the macro mnt_nfs().
+- remove d_iput() operation.
+- introduce a new member 'si_mnt' and 'si_sb.'
+- change some options for tail(1) and grep(1) in order to support
+  busybox, suggested by Tomas M.
+- introduce two new files, module.h and vfsub.h.
 
 20070219
 - mmap behaviour changed, by removing mmap counter.
@@ -20,7 +83,7 @@ Note:
 - bugfix: when the given mount options are too long, aufs should return an
   error expectedly, reported by Tomas M.
 - support directory link count.
-- introduce ./Kconfig.in and 'make -f lock.mk kconfig', which will
+- introduce ./Kconfig.in and make target 'kconfig', which will
   generate ./fs/aufs/Kconfig.
 - introduce configurable amount of branches. but I am afraid you will
   have to wait for aufs supports sysfs.
@@ -147,8 +210,8 @@ Note:
 - bugfix: on NFS branch, after rename(2) to an existed file, the new named
   file may refer to the old inode. this fix is not completed and does not
   support plink option. This is the reason of disabling pseudo-link temporary.
-- bugfix: a pipline in unionctl script uses 'return', but it just finishes the
-  pipeline and doesn't exit from the function.
+- bugfix: a pipeline in unionctl script uses 'return', but it just
+  finishes the pipeline and doesn't exit from the function.
 
 20061218
 - discussing with Tomas M, introduced a new action --whereis to unionctl.
@@ -335,6 +398,13 @@ Note:
 
 2005 Dec
 - start planning and designing personally, the name was junionfs.
+
+2005 Sep
+- got to know Unionfs and start trying it.
+
+2005 Aug
+- got an idea of a stackable filesystem, supposing the old Transparent
+  Filesystem in SunOS.
 
 # Local variables: ;
 # mode: text;

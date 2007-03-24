@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: wkq.h,v 1.4 2007/02/05 01:44:26 sfjro Exp $ */
+/* $Id: wkq.h,v 1.5 2007/03/19 04:32:35 sfjro Exp $ */
 
 #ifndef __AUFS_WKQ_H__
 #define __AUFS_WKQ_H__
@@ -27,12 +27,6 @@
 #include <linux/workqueue.h>
 
 typedef void (*aufs_wkq_func_t)(void *args);
-struct aufs_wkinfo {
-	struct completion comp;
-	struct work_struct wk;
-	aufs_wkq_func_t func;
-	void *args;
-};
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,20)
 #define AufsInitWkq(wk, func)	INIT_WORK(wk, func)
@@ -45,9 +39,9 @@ typedef void (*work_func_t)(void *arg);
 
 #define is_kthread(tsk) ({!(tsk)->mm;})
 
-void wkq_wait(aufs_wkq_func_t func, void *args);
-int __init init_wkq(void);
-void fin_wkq(void);
+void wkq_wait(aufs_wkq_func_t func, void *args, int dlgt);
+int __init au_init_wkq(void);
+void au_fin_wkq(void);
 
 #endif /* __KERNEL__ */
 #endif /* __AUFS_WKQ_H__ */

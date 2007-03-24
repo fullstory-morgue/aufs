@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: misc.h,v 1.16 2007/02/19 03:28:59 sfjro Exp $ */
+/* $Id: misc.h,v 1.19 2007/03/19 04:33:05 sfjro Exp $ */
 
 #ifndef __AUFS_MISC_H__
 #define __AUFS_MISC_H__
@@ -39,32 +39,33 @@ struct aufs_rwsem {
 #endif
 };
 
+#define MtxMustLock(mtx)	DEBUG_ON(!mutex_is_locked(mtx))
+
 /* use with caution */
 #ifdef CONFIG_AUFS_DEBUG_RWSEM
-static inline void rw_init_wlock(struct aufs_rwsem *rw)
+static inline void rw_init_wlock(struct aufs_rwsem *rw, unsigned int lsc)
 {
 	mutex_init(&(rw)->mutex);
-	mutex_lock(&(rw)->mutex);
+	mutex_lock_nested(&(rw)->mutex, lsc);
 }
 #define rw_init_nolock(rw)	mutex_init(&(rw)->mutex)
 #define rw_destroy(rw)		mutex_destroy(&(rw)->mutex)
-#define rw_read_lock(rw)	mutex_lock(&(rw)->mutex)
+#define rw_read_lock(rw, lsc)	mutex_lock_nested(&(rw)->mutex, lsc)
 #define rw_read_unlock(rw)	mutex_unlock(&(rw)->mutex)
 #define rw_dgrade_lock(rw)	/* */
-#define rw_write_lock(rw)	rw_read_lock(rw)
+#define rw_write_lock(rw, lsc)	rw_read_lock(rw, lsc)
 #define rw_write_unlock(rw)	rw_read_unlock(rw)
-// remove this
-#define rw_is_write_lock(rw)	mutex_is_locked(&(rw)->mutex)
-#define RwMustAnyLock(rw)	DEBUG_ON(!mutex_is_locked(&(rw)->mutex))
+#define RwMustAnyLock(rw)	MtxMustLock(&(rw)->mutex)
 #define RwMustReadLock(rw)	RwMustAnyLock(rw)
 #define RwMustWriteLock(rw)	RwMustAnyLock(rw)
+#define RwMustNoWaiters(rw)	DEBUG_ON(!list_empty(&(rw)->mutex.wait_list))
 #else /* CONFIG_AUFS_DEBUG_RWSEM */
 
 #ifdef CONFIG_AUFS_DEBUG
-static inline void rw_init_wlock(struct aufs_rwsem *rw)
+static inline void rw_init_wlock(struct aufs_rwsem *rw, unsigned int lsc)
 {
 	init_rwsem(&(rw)->rwsem);
-	down_write(&(rw)->rwsem);
+	down_write_nested(&(rw)->rwsem, lsc);
 	atomic_set(&(rw)->rcnt, 0);
 }
 static inline void rw_init_nolock(struct aufs_rwsem *rw)
@@ -72,9 +73,9 @@ static inline void rw_init_nolock(struct aufs_rwsem *rw)
 	init_rwsem(&(rw)->rwsem);
 	atomic_set(&(rw)->rcnt, 0);
 }
-static inline void rw_read_lock(struct aufs_rwsem *rw)
+static inline void rw_read_lock(struct aufs_rwsem *rw, unsigned int lsc)
 {
-	down_read(&(rw)->rwsem);
+	down_read_nested(&(rw)->rwsem, lsc);
 	atomic_inc(&(rw)->rcnt);
 }
 static inline void rw_read_unlock(struct aufs_rwsem *rw)
@@ -88,22 +89,20 @@ static inline void rw_dgrade_lock(struct aufs_rwsem *rw)
 	downgrade_write(&(rw)->rwsem);
 }
 #else
-static inline void rw_init_wlock(struct aufs_rwsem *rw)
+static inline void rw_init_wlock(struct aufs_rwsem *rw, unsigned int lsc)
 {
 	init_rwsem(&(rw)->rwsem);
-	down_write(&(rw)->rwsem);
+	down_write_nested(&(rw)->rwsem, lsc);
 }
 #define rw_init_nolock(rw)	init_rwsem(&(rw)->rwsem)
-#define rw_read_lock(rw)	down_read(&(rw)->rwsem)
+#define rw_read_lock(rw, lsc)	down_read_nested(&(rw)->rwsem, lsc)
 #define rw_read_unlock(rw)	up_read(&(rw)->rwsem)
 #define rw_dgrade_lock(rw)	downgrade_write(&(rw)->rwsem)
 #endif /* CONFIG_AUFS_DEBUG */
 
 #define rw_destroy(rw)		/* */
-#define rw_write_lock(rw)	down_write(&(rw)->rwsem)
+#define rw_write_lock(rw, lsc)	down_write_nested(&(rw)->rwsem, lsc)
 #define rw_write_unlock(rw)	up_write(&(rw)->rwsem)
-// remove this
-#define rw_is_write_lock(rw)	(!down_write_trylock(&(rw)->rwsem))
 #define RwMustAnyLock(rw)	DEBUG_ON(down_write_trylock(&(rw)->rwsem))
 
 /* use with caution */
@@ -116,6 +115,7 @@ static inline void rw_init_wlock(struct aufs_rwsem *rw)
 	DEBUG_ON(atomic_read(&(rw)->rcnt)); \
 	} while(0)
 
+#define RwMustNoWaiters(rw)	DEBUG_ON(!list_empty(&(rw)->rwsem.wait_list))
 #endif /* CONFIG_AUFS_DEBUG_RWSEM */
 
 /* ---------------------------------------------------------------------- */
@@ -123,16 +123,17 @@ static inline void rw_init_wlock(struct aufs_rwsem *rw)
 typedef ssize_t (*readf_t)(struct file*, char __user*, size_t, loff_t*);
 typedef ssize_t (*writef_t)(struct file*, const char __user*, size_t, loff_t*);
 
-int safe_unlink(struct inode *h_dir, struct dentry *h_dentry);
+// todo: remove this
 int hidden_notify_change(struct dentry *h_dentry, struct iattr *ia,
-			 struct dentry *dentry);
+			 struct dentry *dentry, int do_bath);
 void *kzrealloc(void *p, int nused, int new_sz);
 struct nameidata *fake_dm(struct nameidata *fake_nd, struct nameidata *nd,
 			  struct super_block *sb, aufs_bindex_t bindex);
 void fake_dm_release(struct nameidata *fake_nd);
-int copy_file(struct file *dst, struct file *src, loff_t len);
+int au_copy_file(struct file *dst, struct file *src, loff_t len,
+		 struct super_block *sb, int *sparse);
 int test_ro(struct super_block *sb, aufs_bindex_t bindex, struct inode *inode);
-int test_perm(struct inode *h_inode, int mask);
+int au_test_perm(struct inode *h_inode, int mask, int do_bath);
 
 #endif /* __KERNEL__ */
 #endif /* __AUFS_MISC_H__ */

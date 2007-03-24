@@ -16,7 +16,7 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
-# $Id: auplink,v 1.2 2007/01/15 04:58:15 sfjro Exp $
+# $Id: auplink,v 1.4 2007/03/05 02:21:41 sfjro Exp $
 
 #set -x
 tmp=/tmp/$$
@@ -25,7 +25,7 @@ set -e
 Usage()
 {
 	cat <<- EOF 1>&2
-	usage: $0 aufs_dir list|cpup|flush
+	usage: $0 aufs_mount_point list|cpup|flush
 	'list' shows the pseudo-linked inode numbers and filenames.
 	'cpup' copies-up all pseudo-link to the writeble branch.
 	'flush' calls 'cpup', and then "mount -o remount,clean_plink=inum"
@@ -46,7 +46,7 @@ List()
 {
 	sed -e 's/^\([0-9]*\) .*$/-o -inum \1/' |
 	xargs > $tmp.args
-	Find "$aufs" \( `cut -c3- $tmp.args` \) $@
+	Find "$mntpnt" \( `cut -c3- $tmp.args` \) $@
 }
 
 Cpup()
@@ -61,7 +61,7 @@ Cpup()
 
 test $# -eq 2 || Usage
 cd "$1"
-aufs="$PWD"
+mntpnt="$PWD"
 cd "$OLDPWD"
 
 do_flush=0
@@ -71,7 +71,7 @@ then
 	. $f
 	for i in $FLUSH
 	do
-		test "$i" = "$aufs" -o "$i" = "ALL" || continue
+		test "$i" = "$mntpnt" -o "$i" = "ALL" || continue
 		do_flush=1
 		break
 	done
@@ -80,11 +80,19 @@ case $2 in
 cpup|flush) test $do_flush -eq 0 && exit 0;;
 esac
 
-grep -w "$aufs" /proc/mounts |
-tail -1 |
+brs=/sys/fs/aufs/brs
+if [ -r $brs ]
+then
+	grep " $mntpnt " $brs |
+	tail -n 1 |
+	tr '[, ]' '\n'
+else
+	grep " $mntpnt " /proc/mounts |
+	tail -n 1 |
+	tr ',' '\n'
+fi |
 sed -e 's/\\/\\\\/g' |
-tr ',' '\n' |
-grep '^br:' |
+egrep '^(dirs=|br:)' |
 tr ':' '\n' |
 grep '=rw$' |
 sed -e 's/=rw$//' |
@@ -99,10 +107,11 @@ do
 	inum=`basename "$pname" | cut -f1 -d.`
 	echo $inum $nlink "$pname"
 done > $tmp
+test -w $brs && >> $brs
 test -s $tmp || { rm -f $tmp $tmp.*; exit 0; }
 
 # debug
-#mount -o remount,list_plink "$aufs"
+#mount -o remount,list_plink "$mntpnt"
 
 case $2 in
 list)
@@ -114,14 +123,14 @@ cpup)
 	Cpup < $tmp
 	;;
 flush)
-	#echo -n Flushing pseudo-links on "$aufs"...
+	#echo -n Flushing pseudo-links on "$mntpnt"...
 	Cpup < $tmp
 
 	# all are copied-up, and then remove all pseudo-links.
-	mount -o remount,clean_plink "$aufs"
+	mount -o remount,clean_plink "$mntpnt"
 	cut -f3- -d' ' $tmp | xargs -r rm
 	# debug
-	#mount -o remount,list_plink "$aufs"
+	#mount -o remount,list_plink "$mntpnt"
 	#echo done.
 	;;
 *)

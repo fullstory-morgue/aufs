@@ -16,23 +16,23 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: debug.c,v 1.20 2007/01/29 02:32:59 sfjro Exp $ */
+/* $Id: debug.c,v 1.22 2007/03/19 04:30:30 sfjro Exp $ */
 
 #include "aufs.h"
 
 atomic_t aufs_cond = ATOMIC_INIT(0);
 
 #if defined(CONFIG_LKTR) || defined(CONFIG_LKTR_MODULE)
-#define dpri(fmt,arg...)	do { \
+#define dpri(fmt, arg...)	do { \
 	if (LktrCond) printk(KERN_DEBUG fmt, ##arg); \
 	} while(0)
 #else
-#define dpri(fmt,arg...)	printk(KERN_DEBUG fmt, ##arg)
+#define dpri(fmt, arg...)	printk(KERN_DEBUG fmt, ##arg)
 #endif
 
 /* ---------------------------------------------------------------------- */
 
-void dpri_whlist(struct aufs_nhash *whlist)
+void au_dpri_whlist(struct aufs_nhash *whlist)
 {
 	int i;
 	struct hlist_head *head;
@@ -49,7 +49,7 @@ void dpri_whlist(struct aufs_nhash *whlist)
 	}
 }
 
-void dpri_vdir(struct aufs_vdir *vdir)
+void au_dpri_vdir(struct aufs_vdir *vdir)
 {
 	int i;
 	union aufs_deblk_p p;
@@ -104,7 +104,7 @@ static int do_pri_inode(aufs_bindex_t bindex, struct inode *inode)
 	return 0;
 }
 
-void dpri_inode(struct inode *inode)
+void au_dpri_inode(struct inode *inode)
 {
 	struct aufs_iinfo *iinfo;
 	aufs_bindex_t bindex;
@@ -139,7 +139,7 @@ static int do_pri_dentry(aufs_bindex_t bindex, struct dentry *dentry)
 	return 0;
 }
 
-void dpri_dentry(struct dentry *dentry)
+void au_dpri_dentry(struct dentry *dentry)
 {
 	struct aufs_dinfo *dinfo;
 	aufs_bindex_t bindex;
@@ -174,7 +174,7 @@ static int do_pri_file(aufs_bindex_t bindex, struct file *file)
 	return 0;
 }
 
-void dpri_file(struct file *file)
+void au_dpri_file(struct file *file)
 {
 	struct aufs_finfo *finfo;
 	aufs_bindex_t bindex;
@@ -218,7 +218,7 @@ static int do_pri_br(aufs_bindex_t bindex, struct aufs_branch *br)
 	return 0;
 }
 
-void dpri_sb(struct super_block *sb)
+void au_dpri_sb(struct super_block *sb)
 {
 	struct aufs_sbinfo *sbinfo;
 	aufs_bindex_t bindex;

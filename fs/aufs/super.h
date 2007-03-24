@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: super.h,v 1.33 2007/02/19 03:29:38 sfjro Exp $ */
+/* $Id: super.h,v 1.37 2007/03/19 04:32:35 sfjro Exp $ */
 
 #ifndef __AUFS_SUPER_H__
 #define __AUFS_SUPER_H__
@@ -30,7 +30,6 @@
 #define AUFS_FIRST_INO		11
 
 #ifdef __KERNEL__
-#include "branch.h"
 
 struct aufs_sbinfo {
 	struct aufs_rwsem	si_rwsem;
@@ -71,36 +70,46 @@ struct aufs_sbinfo {
 	spinlock_t		si_plink_lock;
 	struct list_head	si_plink;
 
-#if 0 //defined(CONFIG_EXPORTFS) || defined(CONFIG_EXPORTFS_MODULE)
-	int			si_tested_generation;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,18)
+	/* super_blocks list is not exported */
+	struct list_head	si_list;
+	struct vfsmount		*si_mnt; /* never get/put */
 #endif
 
-#if 0 //def CONFIG_AUFS_NEST
+	/* sysfs */
+	struct kobject		si_kobj;
+
+#if 0 //def CONFIG_AUFS_AS_BRANCH
 	/* locked vma list for mmap() */ // very dirty
 	spinlock_t		si_lvma_lock;
 	struct list_head	si_lvma;
 #endif
-	/* sysfs */
-	struct kobject		si_kobj;
 };
 
 #define sbtype(sb)	({(sb)->s_type->name;})
+#define SB_AUFS(sb)	(!strcmp(sbtype(sb), AUFS_FSTYPE))
+#if defined(CONFIG_NFS_FS) || defined(CONFIG_NFS_FS_MODULE)
 #define SB_NFS(sb)	(!strcmp(sbtype(sb), "nfs"))
-#if !defined(CONFIG_NFS_FS) && !defined(CONFIG_NFS_FS_MODULE)
-#undef SB_NFS
+#else
 #define SB_NFS(sb)	0
 #endif
-#define SB_AUFS(sb)	(!strcmp(sbtype(sb), AUFS_FSTYPE))
 #define SB_REMOTE(sb)	SB_NFS(sb)
 
-#if 0 //defined(CONFIG_EXPORTFS) || defined(CONFIG_EXPORTFS_MODULE)
+static inline struct vfsmount *do_mnt_nfs(struct vfsmount *h_mnt)
+{
+	if (!SB_NFS(h_mnt->mnt_sb))
+		return NULL;
+	return h_mnt;
+}
+
+#ifdef CONFIG_AUFS_EXPORT
 extern struct export_operations aufs_export_op;
 #define init_export_op(sb)	({(sb)->s_export_op = &aufs_export_op;})
 #else
 #define init_export_op(sb)	/* */
 #endif
 
-#if 0 //def CONFIG_AUFS_NEST
+#if 0 //def CONFIG_AUFS_AS_BRANCH
 static inline void init_lvma(struct aufs_sbinfo *sbinfo)
 {
 	spin_lock_init(&sbinfo->si_lvma_lock);
@@ -111,8 +120,8 @@ static inline void init_lvma(struct aufs_sbinfo *sbinfo)
 #endif
 
 /* see linux/include/linux/jiffies.h */
-#define AufsGenYounger(a,b)	((b) - (a) < 0)
-#define AufsGenOlder(a,b)	AufsGenYounger(b,a)
+#define AufsGenYounger(a, b)	((b) - (a) < 0)
+#define AufsGenOlder(a, b)	AufsGenYounger(b, a)
 
 /* flags for aufs_read_lock()/di_read_lock() */
 #define AUFS_D_WLOCK		1
@@ -120,9 +129,15 @@ static inline void init_lvma(struct aufs_sbinfo *sbinfo)
 #define AUFS_I_WLOCK		4
 
 /* lock superblock. mainly for entry point functions */
-#define si_read_lock(sb)	rw_read_lock(&stosi(sb)->si_rwsem)
+#define si_read_lock(sb) \
+	rw_read_lock(&stosi(sb)->si_rwsem, AUFS_LSC_SBINFO)
+#define si_read_lock_nfsd(sb) \
+	rw_read_lock(&stosi(sb)->si_rwsem, AUFS_LSC_SBINFO_NFS)
+#define si_read_lock_inotify(sb) \
+	rw_read_lock(&stosi(sb)->si_rwsem, AUFS_LSC_SBINFO_HINOTIFY)
 #define si_read_unlock(sb)	rw_read_unlock(&stosi(sb)->si_rwsem)
-#define si_write_lock(sb)	rw_write_lock(&stosi(sb)->si_rwsem)
+#define si_write_lock(sb) \
+	rw_write_lock(&stosi(sb)->si_rwsem, AUFS_LSC_SBINFO)
 #define si_write_unlock(sb)	rw_write_unlock(&stosi(sb)->si_rwsem)
 #define SiMustReadLock(sb)	RwMustReadLock(&stosi(sb)->si_rwsem)
 #define SiMustWriteLock(sb)	RwMustWriteLock(&stosi(sb)->si_rwsem)
@@ -140,10 +155,10 @@ static inline void init_lvma(struct aufs_sbinfo *sbinfo)
 #define MS_COO_LEAF		(1 << 8)
 #define MS_COO_ALL		(1 << 9)
 #define MS_ALWAYS_DIROPQ	(1 << 10)
-#define MS_IPRIVATE		(1 << 11)
-#define MS_SET(sb,flg)		({stosi(sb)->si_flags |= flg;})
-#define MS_CLR(sb,flg)		({stosi(sb)->si_flags &= ~(flg);})
-#define IS_MS(sb,flg)		({stosi(sb)->si_flags & flg;})
+#define MS_DLGT			(1 << 11)
+#define MS_SET(sb, flg)		({stosi(sb)->si_flags |= flg;})
+#define MS_CLR(sb, flg)		({stosi(sb)->si_flags &= ~(flg);})
+#define IS_MS(sb, flg)		({stosi(sb)->si_flags & flg;})
 
 #ifdef CONFIG_AUFS_COMPAT
 #define MS_DEF_DIROPQ		MS_ALWAYS_DIROPQ
@@ -151,24 +166,13 @@ static inline void init_lvma(struct aufs_sbinfo *sbinfo)
 #define MS_DEF_DIROPQ		0
 #endif
 
-#ifdef ForceHinotify
-#define MS_UDBA_DEF		MS_UDBA_INOTIFY
-#else
-#define MS_UDBA_DEF		MS_UDBA_REVAL
-#endif
 #define MS_UDBA_MASK		(MS_UDBA_NONE | MS_UDBA_REVAL | MS_UDBA_INOTIFY)
 #define MS_UDBA(sb)		IS_MS(sb, MS_UDBA_MASK)
-#define MS_COO_DEF		MS_COO_NONE
 #define MS_COO_MASK		(MS_COO_NONE | MS_COO_LEAF | MS_COO_ALL)
 #define MS_COO(sb)		IS_MS(sb, MS_COO_MASK)
-#ifdef ForceIPrivate
-#define MS_IPRIV_DEF		MS_IPRIVATE
-#else
-#define MS_IPRIV_DEF		0
-#endif
 
-#define COMM_DEF		(MS_XINO | MS_UDBA_DEF | MS_WARN_PERM \
-					| MS_COO_DEF | MS_DEF_DIROPQ | MS_IPRIV_DEF)
+#define COMM_DEF		(MS_XINO | MS_UDBA_REVAL | MS_WARN_PERM \
+					| MS_COO_NONE | MS_DEF_DIROPQ)
 #if LINUX_VERSION_CODE != KERNEL_VERSION(2,6,15)
 #define MS_DEF	(COMM_DEF | MS_PLINK)
 #else
@@ -177,41 +181,7 @@ static inline void init_lvma(struct aufs_sbinfo *sbinfo)
 
 /* ---------------------------------------------------------------------- */
 
-/* Superblock to branch */
-#define sbr_mnt(sb, bindex)	({stobr(sb, bindex)->br_mnt;})
-#define sbr_sb(sb, bindex)	({sbr_mnt(sb, bindex)->mnt_sb;})
-#define sbr_count(sb, bindex)	br_count(stobr(sb, bindex))
-#define sbr_get(sb, bindex)	br_get(stobr(sb, bindex))
-#define sbr_put(sb, bindex)	br_put(stobr(sb, bindex))
-#define sbr_perm(sb, bindex) 	({stobr(sb, bindex)->br_perm;})
-#define sbr_perm_str(sb, bindex, str, len) \
-				br_perm_str(str, len, stobr(sb, bindex)->br_perm)
-
-/* ---------------------------------------------------------------------- */
-
-/* kmem cache */
-enum {AUFS_CACHE_DINFO, AUFS_CACHE_ICNTNR, AUFS_CACHE_FINFO, AUFS_CACHE_VDIR,
-      AUFS_CACHE_DEHSTR, AUFS_CACHE_HINOTIFY, _AufsCacheLast};
-extern struct kmem_cache *aufs_cachep[];
-#define aufs_cache_alloc(i)	kmem_cache_alloc(aufs_cachep[i], GFP_KERNEL)
-#define cache_alloc_dinfo() 	aufs_cache_alloc(AUFS_CACHE_DINFO)
-#define cache_alloc_icntnr() 	aufs_cache_alloc(AUFS_CACHE_ICNTNR)
-#define cache_alloc_finfo() 	aufs_cache_alloc(AUFS_CACHE_FINFO)
-#define cache_alloc_vdir() 	aufs_cache_alloc(AUFS_CACHE_VDIR)
-#define cache_alloc_dehstr() 	aufs_cache_alloc(AUFS_CACHE_DEHSTR)
-#define cache_alloc_hinotify() 	aufs_cache_alloc(AUFS_CACHE_HINOTIFY)
-#define aufs_cache_free(i, p)	kmem_cache_free(aufs_cachep[i], p)
-#define cache_free_dinfo(p)	aufs_cache_free(AUFS_CACHE_DINFO, p)
-#define cache_free_icntnr(p)	aufs_cache_free(AUFS_CACHE_ICNTNR, p)
-#define cache_free_finfo(p)	aufs_cache_free(AUFS_CACHE_FINFO, p)
-#define cache_free_vdir(p)	aufs_cache_free(AUFS_CACHE_VDIR, p)
-#define cache_free_dehstr(p)	aufs_cache_free(AUFS_CACHE_DEHSTR, p)
-#define cache_free_hinotify(p)	aufs_cache_free(AUFS_CACHE_HINOTIFY, p)
-
-/* ---------------------------------------------------------------------- */
-
-// module parameter
-extern unsigned char aufs_nwkq;
+int au_show_brs(struct seq_file *seq, struct super_block *sb);
 
 //xino.c
 struct file *xino_create(struct super_block *sb, char *fname, int silent,
@@ -236,8 +206,8 @@ unsigned int IS_MS(struct super_block *sb, unsigned int flg);
 #endif
 aufs_bindex_t sbend(struct super_block *sb);
 struct aufs_branch *stobr(struct super_block *sb, aufs_bindex_t bindex);
-int sigen(struct super_block *sb);
-int sigen_inc(struct super_block *sb);
+int au_sigen(struct super_block *sb);
+int au_sigen_inc(struct super_block *sb);
 int find_bindex(struct super_block *sb, struct aufs_branch *br);
 
 void aufs_read_lock(struct dentry *dentry, int flags);
@@ -248,17 +218,19 @@ void aufs_read_and_write_lock2(struct dentry *d1, struct dentry *d2, int isdir);
 void aufs_read_and_write_unlock2(struct dentry *d1, struct dentry *d2);
 
 #ifdef CONFIG_AUFS_DEBUG
-void list_plink(struct super_block *sb);
+void au_list_plink(struct super_block *sb);
 #else
-#define list_plink(sb)	/* */
+#define au_list_plink(sb)	/* */
 #endif
-int is_plinked(struct super_block *sb, struct inode *inode);
+int au_is_plinked(struct super_block *sb, struct inode *inode);
+struct dentry *lkup_plink(struct super_block *sb, aufs_bindex_t bindex,
+			  struct inode *inode);
 void append_plink(struct super_block *sb, struct inode *inode,
 		  struct dentry *h_dentry, aufs_bindex_t bindex);
-void put_plink(struct super_block *sb);
-void half_refresh_plink(struct super_block *sb, unsigned int id);
+void au_put_plink(struct super_block *sb);
+void half_refresh_plink(struct super_block *sb, aufs_bindex_t br_id);
 
-unsigned int new_br_id(struct super_block *sb);
+aufs_bindex_t new_br_id(struct super_block *sb);
 
 #endif /* __KERNEL__ */
 #endif /* __AUFS_SUPER_H__ */

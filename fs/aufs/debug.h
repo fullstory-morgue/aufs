@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: debug.h,v 1.20 2007/01/22 03:59:00 sfjro Exp $ */
+/* $Id: debug.h,v 1.24 2007/03/19 04:30:52 sfjro Exp $ */
 
 #ifndef __AUFS_DEBUG_H__
 #define __AUFS_DEBUG_H__
@@ -49,8 +49,14 @@ extern atomic_t aufs_cond;
 #define LKTRLabel(label)		/* */
 #endif /* CONFIG_LKTR */
 
-#define TraceErr(e)	do {if(unlikely((e)<0))LKTRTrace("err %d\n",(int)(e));}while(0)
-#define TraceErrPtr(p)	do {if(IS_ERR(p))TraceErr(PTR_ERR(p));}while(0)
+#define TraceErr(e)	do { \
+	if (unlikely((e) < 0)) \
+		LKTRTrace("err %d\n", (int)(e)); \
+	}while(0)
+#define TraceErrPtr(p)	do { \
+	if (IS_ERR(p)) \
+		TraceErr(PTR_ERR(p)); \
+	}while(0)
 #define TraceEnter()	LKTRLabel(enter)
 
 /* dirty macros for debug print, use with "%.*s" and caution */
@@ -69,6 +75,10 @@ extern atomic_t aufs_cond;
 	if (!c++) Warn(fmt, ##arg); \
 	} while (0)
 #define Err(fmt, arg...)	Dpri(KERN_ERR, fmt, ##arg)
+#define Err1(fmt, arg...)	do { \
+	static unsigned char c; \
+	if (!c++) Err(fmt, ##arg); \
+	} while (0)
 #define IOErr(fmt, arg...)	Err("I/O Error, " fmt, ##arg)
 #define IOErr1(fmt, arg...)	do { \
 	static unsigned char c; \
@@ -80,19 +90,19 @@ extern atomic_t aufs_cond;
 
 #ifdef CONFIG_AUFS_DEBUG
 struct aufs_nhash;
-void dpri_whlist(struct aufs_nhash *whlist);
+void au_dpri_whlist(struct aufs_nhash *whlist);
 struct aufs_vdir;
-void dpri_vdir(struct aufs_vdir *vdir);
-void dpri_inode(struct inode *inode);
-void dpri_dentry(struct dentry *dentry);
-void dpri_file(struct file *filp);
-void dpri_sb(struct super_block *sb);
-#define DbgWhlist(w)		do{LKTRTrace(#w "\n"); dpri_whlist(w);}while(0)
-#define DbgVdir(v)		do{LKTRTrace(#v "\n"); dpri_vdir(v);}while(0)
-#define DbgInode(i)		do{LKTRTrace(#i "\n"); dpri_inode(i);}while(0)
-#define DbgDentry(d)		do{LKTRTrace(#d "\n"); dpri_dentry(d);}while(0)
-#define DbgFile(f)		do{LKTRTrace(#f "\n"); dpri_file(f);}while(0)
-#define DbgSb(sb)		do{LKTRTrace(#sb "\n"); dpri_sb(sb);}while(0)
+void au_dpri_vdir(struct aufs_vdir *vdir);
+void au_dpri_inode(struct inode *inode);
+void au_dpri_dentry(struct dentry *dentry);
+void au_dpri_file(struct file *filp);
+void au_dpri_sb(struct super_block *sb);
+#define DbgWhlist(w)		do{LKTRTrace(#w "\n"); au_dpri_whlist(w);}while(0)
+#define DbgVdir(v)		do{LKTRTrace(#v "\n"); au_dpri_vdir(v);}while(0)
+#define DbgInode(i)		do{LKTRTrace(#i "\n"); au_dpri_inode(i);}while(0)
+#define DbgDentry(d)		do{LKTRTrace(#d "\n"); au_dpri_dentry(d);}while(0)
+#define DbgFile(f)		do{LKTRTrace(#f "\n"); au_dpri_file(f);}while(0)
+#define DbgSb(sb)		do{LKTRTrace(#sb "\n"); au_dpri_sb(sb);}while(0)
 #else
 #define DbgWhlist(w)		/* */
 #define DbgVdir(v)		/* */
@@ -104,24 +114,95 @@ void dpri_sb(struct super_block *sb);
 
 /* ---------------------------------------------------------------------- */
 
+#ifndef MAX_LOCKDEP_SUBCLASSES
+#define MAX_LOCKDEP_SUBCLASSES 8
+#define RemoveMe
+#endif
+
+#if MAX_LOCKDEP_SUBCLASSES == 32
 /* lock subclass. or you may think it represents aufs locking order */
-#if 0 // just a note
 enum {
-	AufsLsBegin = I_MUTEX_QUOTA,	// last defined in inode mutex
-	AUFS_LS_SBINFO,
-	AUFS_LS_FINFO,
-	AUFS_LS_DINFO_CHILD,	// child first
-	AUFS_LS_IINFO_CHILD,
-	AUFS_LS_DINFO_PARENT,
-	AUFS_LS_IINFO_PARENT,
-	AUFS_LS_H_PARENT,	// hidden inode, parent first
-	AUFS_LS_H_CHILD,
-	AUFS_LS_H_PARENT2,
-	AUFS_LS_H_CHILD2,
-	AUFS_LS_BR_WH,
-	AUFS_LS_PLINK,
-	AufsLsEnd
+	AufsLscBegin = I_MUTEX_QUOTA,	// last defined in inode mutex
+	AUFS_LSC_SBILIST_SYSFS,		// access to sysfs
+	AUFS_LSC_SBINFO_NFS,		// access from nfsd
+	AUFS_LSC_SBINFO_HINOTIFY,	// udba=inotify
+	AUFS_LSC_SBINFO,
+	AUFS_LSC_FINFO,
+	AUFS_LSC_DINFO_CHILD,	// child first
+	AUFS_LSC_IINFO_CHILD,
+	AUFS_LSC_DINFO_CHILD2,	// rename(2), link(2), and cpup at hinotify
+	AUFS_LSC_IINFO_CHILD2,
+	AUFS_LSC_DINFO_CHILD3,	// copyup dirs
+	AUFS_LSC_IINFO_CHILD3,
+	AUFS_LSC_DINFO_PARENT,
+	AUFS_LSC_IINFO_PARENT,
+	AUFS_LSC_DINFO_PARENT2,	// rename(2), link(2), and cpup at hinotify
+	AUFS_LSC_IINFO_PARENT2,
+	AUFS_LSC_DINFO_PARENT3,	// copyup dirs
+	AUFS_LSC_IINFO_PARENT3,
+	AUFS_LSC_H_GPARENT,	// setattr with inotify
+	AUFS_LSC_H_PARENT,	// hidden inode, parent first
+	//AUFS_LSC_INODE_NEW,
+	AUFS_LSC_IINFO_NEW,
+	AUFS_LSC_H_CHILD,
+	AUFS_LSC_H_PARENT2,
+	AUFS_LSC_H_CHILD2,
+	AUFS_LSC_BR_WH,
+	AUFS_LSC_PLINK,
+	AUFS_LSC_SBILIST,
+	AufsLscEnd
 };
+#else
+enum {
+	AUFS_LSC_SBILIST_SYSFS,
+	AUFS_LSC_SBILIST
+};
+enum {
+	AUFS_LSC_SBINFO_NFS,
+	AUFS_LSC_SBINFO_HINOTIFY,
+	AUFS_LSC_SBINFO
+};
+enum {
+	AUFS_LSC_FINFO
+};
+enum {
+	AUFS_LSC_DINFO_CHILD,
+	AUFS_LSC_DINFO_CHILD2,
+	AUFS_LSC_DINFO_CHILD3,
+	AUFS_LSC_DINFO_PARENT,
+	AUFS_LSC_DINFO_PARENT2,
+	AUFS_LSC_DINFO_PARENT3
+};
+enum {
+	AUFS_LSC_IINFO_CHILD,
+	AUFS_LSC_IINFO_CHILD2,
+	AUFS_LSC_IINFO_CHILD3,
+	AUFS_LSC_IINFO_PARENT,
+	AUFS_LSC_IINFO_PARENT2,
+	AUFS_LSC_IINFO_PARENT3,
+	AUFS_LSC_IINFO_NEW
+};
+// default MAX_LOCKDEP_SUBCLASSES(8) is not enough
+enum {
+	AufsLscBegin = I_MUTEX_QUOTA,
+	AUFS_LSC_H_GPARENT,
+	AUFS_LSC_H_PARENT,
+	//AUFS_LSC_INODE_NEW,
+	AUFS_LSC_H_CHILD,
+	AUFS_LSC_H_PARENT2,
+	AUFS_LSC_H_CHILD2,
+	AufsLscEnd
+};
+enum {
+	AUFS_LSC_BR_WH
+};
+enum {
+	AUFS_LSC_PLINK
+};
+#endif
+
+#ifdef RemoveMe
+#undef MAX_LOCKDEP_SUBCLASSES
 #endif
 
 #endif /* __KERNEL__ */

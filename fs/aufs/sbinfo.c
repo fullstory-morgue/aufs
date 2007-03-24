@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: sbinfo.c,v 1.22 2007/02/19 03:29:20 sfjro Exp $ */
+/* $Id: sbinfo.c,v 1.25 2007/03/19 04:31:31 sfjro Exp $ */
 
 #include "aufs.h"
 
@@ -62,19 +62,19 @@ struct aufs_branch *stobr(struct super_block *sb, aufs_bindex_t bindex)
 	return stosi(sb)->si_branch[0 + bindex];
 }
 
-int sigen(struct super_block *sb)
+int au_sigen(struct super_block *sb)
 {
 	SiMustAnyLock(sb);
 	return stosi(sb)->si_generation;
 }
 
-int sigen_inc(struct super_block *sb)
+int au_sigen_inc(struct super_block *sb)
 {
 	int gen;
 
 	SiMustWriteLock(sb);
 	gen = ++stosi(sb)->si_generation;
-	update_digen(sb->s_root);
+	au_update_digen(sb->s_root);
 	sb->s_root->d_inode->i_version++;
 	//smp_mb();
 	return gen;
@@ -98,9 +98,9 @@ void aufs_read_lock(struct dentry *dentry, int flags)
 {
 	si_read_lock(dentry->d_sb);
 	if (flags & AUFS_D_WLOCK)
-		di_write_lock(dentry);
+		di_write_lock_child(dentry);
 	else
-		di_read_lock(dentry, flags);
+		di_read_lock_child(dentry, flags);
 }
 
 void aufs_read_unlock(struct dentry *dentry, int flags)
@@ -115,7 +115,7 @@ void aufs_read_unlock(struct dentry *dentry, int flags)
 void aufs_write_lock(struct dentry *dentry)
 {
 	si_write_lock(dentry->d_sb);
-	di_write_lock(dentry);
+	di_write_lock_child(dentry);
 }
 
 void aufs_write_unlock(struct dentry *dentry)
@@ -128,7 +128,7 @@ void aufs_read_and_write_lock2(struct dentry *d1, struct dentry *d2, int isdir)
 {
 	DEBUG_ON(d1 == d2 || d1->d_sb != d2->d_sb);
 	si_read_lock(d1->d_sb);
-	di_write_lock2(d1, d2, isdir);
+	di_write_lock2_child(d1, d2, isdir);
 }
 
 void aufs_read_and_write_unlock2(struct dentry *d1, struct dentry *d2)
@@ -146,7 +146,7 @@ struct aufs_pseudo_link {
 };
 
 #ifdef CONFIG_AUFS_DEBUG
-void list_plink(struct super_block *sb)
+void au_list_plink(struct super_block *sb)
 {
 	struct aufs_sbinfo *sbinfo;
 	struct list_head *plink_list;
@@ -165,7 +165,7 @@ void list_plink(struct super_block *sb)
 }
 #endif
 
-int is_plinked(struct super_block *sb, struct inode *inode)
+int au_is_plinked(struct super_block *sb, struct inode *inode)
 {
 	int found;
 	struct aufs_sbinfo *sbinfo;
@@ -189,6 +189,52 @@ int is_plinked(struct super_block *sb, struct inode *inode)
 	return found;
 }
 
+// 20 is max digits length of ulong 64
+#define PLINK_NAME_LEN	((20 + 1) * 2)
+
+static int plink_name(char *name, int len, struct inode *inode,
+		      aufs_bindex_t bindex)
+{
+	int rlen;
+	struct inode *h_inode;
+
+	LKTRTrace("i%lu, b%d\n", inode->i_ino, bindex);
+	DEBUG_ON(len != PLINK_NAME_LEN);
+	h_inode = h_iptr_i(inode, bindex);
+	DEBUG_ON(!h_inode);
+	rlen = snprintf(name, len, "%lu.%lu", inode->i_ino, h_inode->i_ino);
+	DEBUG_ON(rlen >= len);
+	return rlen;
+}
+
+struct dentry *lkup_plink(struct super_block *sb, aufs_bindex_t bindex,
+			  struct inode *inode)
+{
+	struct dentry *h_dentry, *h_parent;
+	struct aufs_branch *br;
+	struct inode *h_dir;
+	char tgtname[PLINK_NAME_LEN];
+	int len;
+	struct lkup_args lkup;
+
+	LKTRTrace("b%d, i%lu\n", bindex, inode->i_ino);
+	br = stobr(sb, bindex);
+	h_parent = br->br_plink;
+	DEBUG_ON(!h_parent);
+	h_dir = h_parent->d_inode;
+	DEBUG_ON(!h_dir);
+
+	len = plink_name(tgtname, sizeof(tgtname), inode, bindex);
+
+	// always superio.
+	lkup.nfsmnt = do_mnt_nfs(br->br_mnt);
+	lkup.dlgt = need_dlgt(sb);
+	hi_lock_parent(h_dir);
+	h_dentry = sio_lkup_one(tgtname, h_parent, len, &lkup);
+	i_unlock(h_dir);
+	return h_dentry;
+}
+
 static int do_whplink(char *tgt, int len, struct dentry *h_parent,
 		      struct dentry *h_dentry, struct vfsmount *h_mnt,
 		      struct super_block *sb)
@@ -196,8 +242,12 @@ static int do_whplink(char *tgt, int len, struct dentry *h_parent,
 	int err;
 	struct dentry *h_tgt;
 	struct inode *h_dir;
+	struct lkup_args lkup = {
+		.nfsmnt = h_mnt,
+		.dlgt	= need_dlgt(sb)
+	};
 
-	h_tgt = lkup_one(tgt, h_parent, len, h_mnt);
+	h_tgt = lkup_one(tgt, h_parent, len, &lkup);
 	err = PTR_ERR(h_tgt);
 	if (IS_ERR(h_tgt))
 		goto out;
@@ -205,9 +255,9 @@ static int do_whplink(char *tgt, int len, struct dentry *h_parent,
 	err = 0;
 	h_dir = h_parent->d_inode;
 	if (unlikely(h_tgt->d_inode && h_tgt->d_inode != h_dentry->d_inode))
-		err = hipriv_unlink(h_dir, h_tgt, sb);
+		err = vfsub_unlink(h_dir, h_tgt, lkup.dlgt);
 	if (!err && !h_tgt->d_inode) {
-		err = hipriv_link(h_dentry, h_dir, h_tgt, sb);
+		err = vfsub_link(h_dentry, h_dir, h_tgt, lkup.dlgt);
 		//inode->i_nlink++;
 	}
 	dput(h_tgt);
@@ -241,9 +291,7 @@ static int whplink(struct dentry *h_dentry, struct inode *inode,
 	struct aufs_branch *br;
 	struct dentry *h_parent;
 	struct inode *h_dir;
-	// 20 is max digits length of ulong 64
-	char tgtname[(20 + 1) * 2];
-	struct aufs_h_ipriv ipriv;
+	char tgtname[PLINK_NAME_LEN];
 
 	LKTRTrace("%.*s\n", DLNPair(h_dentry));
 	br = stobr(inode->i_sb, bindex);
@@ -252,12 +300,11 @@ static int whplink(struct dentry *h_dentry, struct inode *inode,
 	h_dir = h_parent->d_inode;
 	DEBUG_ON(!h_dir);
 
-	len = snprintf(tgtname, sizeof(tgtname), "%lu.%lu",
-		       inode->i_ino, h_dentry->d_inode->i_ino);
-	DEBUG_ON(len >= sizeof(tgtname));
+	len = plink_name(tgtname, sizeof(tgtname), inode, bindex);
 
 	// always superio.
-	i_lock_priv(h_dir, &ipriv, sb);
+	//todo: lockdep
+	hi_lock_parent(h_dir);
 	if (!is_kthread(current)) {
 		struct do_whplink_args args = {
 			.errp		= &err,
@@ -265,14 +312,14 @@ static int whplink(struct dentry *h_dentry, struct inode *inode,
 			.len		= len,
 			.h_parent	= h_parent,
 			.h_dentry	= h_dentry,
-			.h_mnt		= br->br_mnt,
+			.h_mnt		= do_mnt_nfs(br->br_mnt),
 			.sb		= sb
 		};
-		wkq_wait(call_do_whplink, &args);
+		wkq_wait(call_do_whplink, &args, /*dlgt*/0);
 	} else
-		err = do_whplink(tgtname, len, h_parent, h_dentry, br->br_mnt,
-				 sb);
-	i_unlock_priv(h_dir, &ipriv);
+		err = do_whplink(tgtname, len, h_parent, h_dentry,
+				 do_mnt_nfs(br->br_mnt), sb);
+	i_unlock(h_dir);
 
 	TraceErr(err);
 	return err;
@@ -336,7 +383,7 @@ static void do_put_plink(struct aufs_pseudo_link *plink, int do_del)
 	kfree(plink);
 }
 
-void put_plink(struct super_block *sb)
+void au_put_plink(struct super_block *sb)
 {
 	struct aufs_sbinfo *sbinfo;
 	struct list_head *plink_list;
@@ -355,7 +402,7 @@ void put_plink(struct super_block *sb)
 	//spin_unlock(&sbinfo->si_plink_lock);
 }
 
-void half_refresh_plink(struct super_block *sb, unsigned int id)
+void half_refresh_plink(struct super_block *sb, aufs_bindex_t br_id)
 {
 	struct aufs_sbinfo *sbinfo;
 	struct list_head *plink_list;
@@ -374,13 +421,13 @@ void half_refresh_plink(struct super_block *sb, unsigned int id)
 	list_for_each_entry_safe(plink, tmp, plink_list, list) {
 		do_put = 0;
 		inode = igrab(plink->inode);
-		ii_write_lock(inode);
+		ii_write_lock_child(inode);
 		bstart = ibstart(inode);
 		bend = ibend(inode);
 		if (bstart >= 0) {
 			for (bindex = bstart; bindex <= bend; bindex++) {
 				if (!h_iptr_i(inode, bindex)
-				    || itoid_index(inode, bindex) != id)
+				    || itoid_index(inode, bindex) != br_id)
 					continue;
 				set_h_iptr(inode, bindex, NULL, 0);
 				do_put = 1;
@@ -406,16 +453,16 @@ void half_refresh_plink(struct super_block *sb, unsigned int id)
 
 /* ---------------------------------------------------------------------- */
 
-unsigned int new_br_id(struct super_block *sb)
+aufs_bindex_t new_br_id(struct super_block *sb)
 {
-	unsigned int id;
+	aufs_bindex_t br_id;
 
 	TraceEnter();
 	SiMustWriteLock(sb);
 
 	while (1) {
-		id = ++stosi(sb)->si_last_br_id;
-		if (id && find_brindex(sb, id) < 0)
-			return id;
+		br_id = ++stosi(sb)->si_last_br_id;
+		if (br_id && find_brindex(sb, br_id) < 0)
+			return br_id;
 	}
 }

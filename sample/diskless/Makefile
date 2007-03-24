@@ -1,7 +1,7 @@
 
 # aufs sample -- diskless system
 
-# Copyright (C) 2006 Junjiro Okajima
+# Copyright (C) 2006, 2007 Junjiro Okajima
 #
 # This program, aufs is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -17,7 +17,7 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
-# $Id: Makefile,v 1.1 2006/12/22 06:08:56 sfjro Exp $
+# $Id: Makefile,v 1.2 2007/03/12 01:54:55 sfjro Exp $
 
 include def.mk
 -include priv_def.mk
@@ -57,6 +57,20 @@ retr update:
 # local install
 local: ${DhcpClients}
 	script -c "${MAKE} -f local.mk $@"
+
+########################################
+slax:
+	${MAKE} -f nfscd.mk NfsCdDir=${NfsSlax} NfsCdUrl=${SlaxUrl} \
+		NfsCdKoFull="${SlaxKoFull}" NfsCdKo="${SlaxKo}"
+knoppix:
+	${MAKE} -f nfscd.mk NfsCdDir=${NfsKnoppix} NfsCdUrl=${KnoppixUrl} \
+		NfsCdKoFull="${KnoppixKoFull}" NfsCdKo="${KnoppixKo}"
+gentoo:
+	${MAKE} -f nfscd.mk NfsCdDir=${NfsGentoo} NfsCdUrl=${GentooUrl} \
+		NfsCdKoFull="${GentooKoFull}" NfsCdKo="${GentooKo}"
+edgy:
+	${MAKE} -f nfscd.mk NfsCdDir=${NfsEdgy} NfsCdUrl=${EdgyUrl} \
+		NfsCdKoFull="${EdgyKoFull}" NfsCdKo="${EdgyKo}"
 
 ########################################
 

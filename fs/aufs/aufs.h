@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: aufs.h,v 1.17 2007/01/22 04:00:21 sfjro Exp $ */
+/* $Id: aufs.h,v 1.19 2007/02/26 03:49:24 sfjro Exp $ */
 
 #ifndef __AUFS_H__
 #define __AUFS_H__
@@ -33,6 +33,17 @@
 #define D_CHILD			d_child
 #else
 #define D_CHILD			d_u.d_child
+#endif
+
+/* ---------------------------------------------------------------------- */
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,18)
+#define I_MUTEX_QUOTA			0
+#define lockdep_off()			/* */
+#define lockdep_on()			/* */
+#define mutex_lock_nested(mtx, lsc)	mutex_lock(mtx)
+#define down_write_nested(rw, lsc)	down_write(rw)
+#define down_read_nested(rw, lsc)	down_read(rw)
 #endif
 
 /* ---------------------------------------------------------------------- */
@@ -57,8 +68,10 @@
 #include "inode.h"
 //#include "kobj.h"
 #include "misc.h"
+#include "module.h"
 #include "opts.h"
 #include "super.h"
+#include "vfsub.h"
 #include "whout.h"
 #include "wkq.h"
 //#include "xattr.h"

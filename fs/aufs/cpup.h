@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: cpup.h,v 1.10 2007/02/19 03:26:39 sfjro Exp $ */
+/* $Id: cpup.h,v 1.12 2007/03/19 04:30:30 sfjro Exp $ */
 
 #ifndef __AUFS_CPUP_H__
 #define __AUFS_CPUP_H__
@@ -29,17 +29,17 @@
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,19)
 #define cpup_attr_blksize(i, h_i)	/* */
 #else
-#define cpup_attr_blksize(i, h_i)	({i->i_blksize = h_i->i_blksize;})
+#define cpup_attr_blksize(i, h_i)	({(i)->i_blksize = (h_i)->i_blksize;})
 #endif
-void cpup_attr_timesizes(struct inode *inode);
-void cpup_attr_nlink(struct inode *inode);
-void cpup_attr_changable(struct inode *inode);
-void cpup_attr_all(struct inode *inode);
+void au_cpup_attr_timesizes(struct inode *inode);
+void au_cpup_attr_nlink(struct inode *inode);
+void au_cpup_attr_changable(struct inode *inode);
+void au_cpup_attr_all(struct inode *inode);
 
 #define CPUP_DTIME		1	// do dtime_store/revert
 // todo: remove this
 #define CPUP_LOCKED_GHDIR	2	// grand parent hidden dir is locked
-unsigned int flags_cpup(unsigned int init, struct dentry *parent);
+unsigned int au_flags_cpup(unsigned int init, struct dentry *parent);
 
 int cpup_single(struct dentry *dentry, aufs_bindex_t bdst, aufs_bindex_t bsrc,
 		loff_t len, unsigned int flags);
@@ -53,8 +53,6 @@ int sio_cpup_simple(struct dentry *dentry, aufs_bindex_t bdst, loff_t len,
 int cpup_dirs(struct dentry *dentry, aufs_bindex_t bdst, struct dentry *locked);
 int test_and_cpup_dirs(struct dentry *dentry, aufs_bindex_t bdst,
 		       struct dentry *locked);
-
-int cpup_pseudo_link(struct dentry *dentry, aufs_bindex_t bdst, int do_lock);
 
 /* keep timestamps when copyup */
 struct dtime {

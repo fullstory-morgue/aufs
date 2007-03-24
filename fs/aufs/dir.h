@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: dir.h,v 1.13 2007/02/19 03:26:59 sfjro Exp $ */
+/* $Id: dir.h,v 1.15 2007/03/19 04:30:30 sfjro Exp $ */
 
 #ifndef __AUFS_DIR_H__
 #define __AUFS_DIR_H__
@@ -81,16 +81,16 @@ struct aufs_vdir {
 	unsigned long	vd_jiffy;
 };
 
-#define n_hash(name,len)	(full_name_hash(name,len) % AUFS_NHASH_SIZE)
+#define n_hash(name, len)	(full_name_hash(name, len) % AUFS_NHASH_SIZE)
 
 /* ---------------------------------------------------------------------- */
 
 //dir.c
 extern struct file_operations aufs_dir_fop;
-int test_empty_lower(struct dentry *dentry);
+int au_test_empty_lower(struct dentry *dentry);
 int test_empty(struct dentry *dentry, struct aufs_nhash *whlist);
-void add_nlink(struct inode *dir, struct inode *h_dir);
-void sub_nlink(struct inode *dir, struct inode *h_dir);
+void au_add_nlink(struct inode *dir, struct inode *h_dir);
+void au_sub_nlink(struct inode *dir, struct inode *h_dir);
 
 //vdir.c
 void init_nhash(struct aufs_nhash *nhash);
@@ -101,8 +101,8 @@ int test_known_wh(struct aufs_nhash *whlist, char *name, int namelen);
 int append_wh(struct aufs_nhash *whlist, char *name, int namelen,
 	      aufs_bindex_t bindex);
 void free_vdir(struct aufs_vdir *vdir);
-int init_vdir(struct file *file);
-int fill_de(struct file *file, void *dirent, filldir_t filldir);
+int au_init_vdir(struct file *file);
+int au_fill_de(struct file *file, void *dirent, filldir_t filldir);
 
 #endif /* __KERNEL__ */
 #endif /* __AUFS_DIR_H__ */

@@ -2,7 +2,7 @@
 aufs sample for diskless machines
 Junjiro Okajima
 
-# $Id: README,v 1.1 2006/12/22 06:08:56 sfjro Exp $
+# $Id: README,v 1.2 2007/03/12 01:54:55 sfjro Exp $
 
 Please run "man -l diskless.6aufs", or "make diskless.html" and read it.
 
@@ -39,6 +39,8 @@ local.mk
 	install Debian system locally under the dir specified in def.mk.
 local.sh
 	install Debian system locally under the dir specified in def.mk.
+nfscd.mk
+	makefile for nfscd which is slax and knoppix.
 preseed.sh
 	preseeding/pre-configuring locally installed Debian system.
 pxe.conf
@@ -48,7 +50,7 @@ retr.mk
 	retrieves Debian packages and spool them.
 
 
-Enjoy the centerized maintenance for a bunch of machines, by aufs and this sample.
+Enjoy the centralized maintenance for a bunch of machines, by aufs and this sample.
 
 # Local variables: ;
 # mode: text;

@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: i_op_add.c,v 1.29 2007/02/19 03:28:07 sfjro Exp $ */
+/* $Id: i_op_add.c,v 1.33 2007/03/19 04:31:31 sfjro Exp $ */
 
 //#include <linux/fs.h>
 //#include <linux/namei.h>
@@ -34,14 +34,16 @@ static int epilog(struct dentry *wh_dentry, struct dentry *dentry)
 	aufs_bindex_t bwh;
 	struct inode *inode, *dir;
 	struct dentry *wh;
+	struct lkup_args lkup;
 
 	LKTRTrace("wh %p, %.*s\n", wh_dentry, DLNPair(dentry));
 
+	lkup.dlgt = need_dlgt(dentry->d_sb);
 	bwh = -1;
 	if (wh_dentry) {
 		bwh = dbwh(dentry);
-		err = unlink_wh_dentry(wh_dentry->d_parent->d_inode, wh_dentry,
-				       dentry);
+		err = au_unlink_wh_dentry(wh_dentry->d_parent->d_inode,
+					  wh_dentry, dentry, lkup.dlgt);
 		//err = -1;
 		if (unlikely(err))
 			goto out;
@@ -54,7 +56,7 @@ static int epilog(struct dentry *wh_dentry, struct dentry *dentry)
 		dir = dentry->d_parent->d_inode;
 		/* or always cpup dir mtime? */
 		if (ibstart(dir) == dbstart(dentry))
-			cpup_attr_timesizes(dir);
+			au_cpup_attr_timesizes(dir);
 		dir->i_version++;
 		return 0; /* success */
 	}
@@ -64,7 +66,8 @@ static int epilog(struct dentry *wh_dentry, struct dentry *dentry)
 		goto out;
 
 	/* revert */
-	wh = simple_create_wh(dentry, bwh, wh_dentry->d_parent);
+	lkup.nfsmnt = mnt_nfs(dentry->d_sb, bwh);
+	wh = simple_create_wh(dentry, bwh, wh_dentry->d_parent, &lkup);
 	//wh = ERR_PTR(-1);
 	rerr = PTR_ERR(wh);
 	if (!IS_ERR(wh)) {
@@ -87,13 +90,13 @@ static int epilog(struct dentry *wh_dentry, struct dentry *dentry)
  */
 static struct dentry *lock_hdir_lkup_wh(struct dentry *dentry, struct dtime *dt,
 					struct dentry *src_dentry,
-					int do_lock_srcdir,
-					struct aufs_h_ipriv *ipriv)
+					int do_lock_srcdir)
 {
 	struct dentry *wh_dentry, *parent, *hidden_parent;
 	int err;
 	aufs_bindex_t bstart, bcpup;
 	struct inode *dir, *h_dir;
+	struct lkup_args lkup;
 
 	LKTRTrace("%.*s, src %p\n", DLNPair(dentry), src_dentry);
 
@@ -108,17 +111,18 @@ static struct dentry *lock_hdir_lkup_wh(struct dentry *dentry, struct dtime *dt,
 	dir = parent->d_inode;
 	hidden_parent = h_dptr_i(parent, bcpup);
 	h_dir = hidden_parent->d_inode;
-	hdir_lock(h_dir, dir, bcpup, ipriv);
+	hdir_lock(h_dir, dir, bcpup);
 	if (dt)
 		dtime_store(dt, parent, hidden_parent);
 	if (/* bcpup != bstart || */ bcpup != dbwh(dentry))
 		return NULL; /* success */
 
-	wh_dentry = lkup_wh(hidden_parent, &dentry->d_name,
-			    mnt_nfs(parent->d_sb, bcpup));
+	lkup.nfsmnt = mnt_nfs(parent->d_sb, bcpup);
+	lkup.dlgt = need_dlgt(parent->d_sb);
+	wh_dentry = lkup_wh(hidden_parent, &dentry->d_name, &lkup);
 	//wh_dentry = ERR_PTR(-1);
 	if (IS_ERR(wh_dentry))
-		hdir_unlock(h_dir, dir, bcpup, ipriv);
+		hdir_unlock(h_dir, dir, bcpup);
 
  out:
 	TraceErrPtr(wh_dentry);
@@ -148,20 +152,19 @@ struct simple_arg {
 static int add_simple(struct inode *dir, struct dentry *dentry,
 		      struct simple_arg *arg)
 {
-	int err;
+	int err, dlgt;
 	struct dentry *hidden_dentry, *hidden_parent, *wh_dentry, *parent;
 	struct inode *hidden_dir;
 	struct dtime dt;
-	struct aufs_h_ipriv ipriv;
 
 	LKTRTrace("type %d, %.*s\n", arg->type, DLNPair(dentry));
 	IMustLock(dir);
 
 	aufs_read_lock(dentry, AUFS_D_WLOCK);
 	parent = dentry->d_parent;
-	di_write_lock(parent);
+	di_write_lock_parent(parent);
 	wh_dentry = lock_hdir_lkup_wh(dentry, &dt, /*src_dentry*/NULL,
-				      /*do_lock_srcdir*/0, &ipriv);
+				      /*do_lock_srcdir*/0);
 	//wh_dentry = ERR_PTR(-1);
 	err = PTR_ERR(wh_dentry);
 	if (IS_ERR(wh_dentry))
@@ -171,6 +174,7 @@ static int add_simple(struct inode *dir, struct dentry *dentry,
 	hidden_parent = hidden_dentry->d_parent;
 	hidden_dir = hidden_parent->d_inode;
 	IMustLock(hidden_dir);
+	dlgt = need_dlgt(dir->i_sb);
 
 #if 1 // partial testing
 	switch (arg->type) {
@@ -182,21 +186,21 @@ static int add_simple(struct inode *dir, struct dentry *dentry,
 			fake_nd.dentry = dget(hidden_parent);
 			fake_nd.mnt = sbr_mnt(dentry->d_sb, dbstart(dentry));
 			mntget(fake_nd.mnt);
-			err = vfs_create(hidden_dir, hidden_dentry,
-					 arg->u.c.mode, &fake_nd);
+			err = vfsub_create(hidden_dir, hidden_dentry,
+					   arg->u.c.mode, &fake_nd, dlgt);
 			path_release(&fake_nd);
 		} else
 #endif
-			err = vfs_create(hidden_dir, hidden_dentry,
-					 arg->u.c.mode, NULL);
+			err = vfsub_create(hidden_dir, hidden_dentry,
+					   arg->u.c.mode, NULL, dlgt);
 		break;
 	case Symlink:
-		err = vfs_symlink(hidden_dir, hidden_dentry,
-				  arg->u.s.symname, S_IALLUGO);
+		err = vfsub_symlink(hidden_dir, hidden_dentry,
+				    arg->u.s.symname, S_IALLUGO, dlgt);
 		break;
 	case Mknod:
-		err = vfs_mknod(hidden_dir, hidden_dentry,
-				arg->u.m.mode, arg->u.m.dev);
+		err = vfsub_mknod(hidden_dir, hidden_dentry,
+				  arg->u.m.mode, arg->u.m.dev, dlgt);
 		break;
 	default:
 		BUG();
@@ -209,9 +213,9 @@ static int add_simple(struct inode *dir, struct dentry *dentry,
 	//err = -1;
 
 	/* revert */
-	if (err && hidden_dentry->d_inode) {
+	if (unlikely(err && hidden_dentry->d_inode)) {
 		int rerr;
-		rerr = hipriv_unlink(hidden_dir, hidden_dentry, dir->i_sb);
+		rerr = vfsub_unlink(hidden_dir, hidden_dentry, dlgt);
 		//rerr = -1;
 		if (rerr) {
 			IOErr("%.*s revert failure(%d, %d)\n",
@@ -222,13 +226,13 @@ static int add_simple(struct inode *dir, struct dentry *dentry,
 		d_drop(dentry);
 	}
 
-	hdir_unlock(hidden_dir, dir, dbstart(dentry), &ipriv);
+	hdir_unlock(hidden_dir, dir, dbstart(dentry));
 	if (wh_dentry)
 		dput(wh_dentry);
 
  out:
 	if (unlikely(err)) {
-		update_dbstart(dentry);
+		au_update_dbstart(dentry);
 		d_drop(dentry);
 	}
 	di_write_unlock(parent);
@@ -269,10 +273,9 @@ int aufs_create(struct inode *dir, struct dentry *dentry, int mode,
 
 struct link_arg {
 	aufs_bindex_t bdst, bsrc;
-	int issamedir;
+	int issamedir, dlgt;
 	struct dentry *src_parent, *parent, *hidden_dentry;
 	struct inode *hidden_dir, *inode;
-	struct aufs_h_ipriv ipriv;
 };
 
 static int cpup_before_link(struct dentry *src_dentry, struct inode *dir,
@@ -285,34 +288,34 @@ static int cpup_before_link(struct dentry *src_dentry, struct inode *dir,
 	TraceEnter();
 
 	err = 0;
-	flags = flags_cpup(CPUP_DTIME, a->parent);
+	flags = au_flags_cpup(CPUP_DTIME, a->parent);
 	src_dir = a->src_parent->d_inode;
 	if (!a->issamedir) {
-		di_read_lock(a->src_parent, AUFS_I_RLOCK);
+		// todo: dead lock?
+		di_read_lock_parent2(a->src_parent, AUFS_I_RLOCK);
 		// this temporary unlock/lock is safe
-		hdir_unlock(a->hidden_dir, dir, a->bdst, &a->ipriv);
+		hdir_unlock(a->hidden_dir, dir, a->bdst);
 		err = test_and_cpup_dirs(src_dentry, a->bdst, a->parent);
 		//err = -1;
 		if (!err) {
 			hdir = h_iptr_i(src_dir, a->bdst);
-			hdir_lock(hdir, src_dir, a->bdst, &a->ipriv);
-			flags = flags_cpup(CPUP_DTIME, a->src_parent);
+			hdir_lock(hdir, src_dir, a->bdst);
+			flags = au_flags_cpup(CPUP_DTIME, a->src_parent);
 		}
 	}
 
 	if (!err) {
-		struct aufs_h_ipriv ipriv;
 		hi = h_dptr(src_dentry)->d_inode;
-		i_lock_priv(hi, &ipriv, src_dentry->d_sb);
+		hi_lock_child(hi);
 		err = sio_cpup_simple(src_dentry, a->bdst, -1, flags);
 		//err = -1;
-		i_unlock_priv(hi, &ipriv);
+		i_unlock(hi);
 	}
 
 	if (!a->issamedir) {
 		if (hdir)
-			hdir_unlock(hdir, src_dir, a->bdst, &a->ipriv);
-		hdir_lock(a->hidden_dir, dir, a->bdst, &a->ipriv);
+			hdir_unlock(hdir, src_dir, a->bdst);
+		hdir_lock(a->hidden_dir, dir, a->bdst);
 		di_read_unlock(a->src_parent, AUFS_I_RLOCK);
 	}
 
@@ -327,7 +330,6 @@ static int cpup_or_link(struct dentry *src_dentry, struct link_arg *a)
 	struct dentry *h_dentry;
 	aufs_bindex_t bstart;
 	struct super_block *sb;
-	struct aufs_h_ipriv ipriv;
 
 	TraceEnter();
 
@@ -344,19 +346,19 @@ static int cpup_or_link(struct dentry *src_dentry, struct link_arg *a)
 		/* copyup src_dentry as the name of dentry. */
 		set_dbstart(src_dentry, a->bdst);
 		set_h_dptr(src_dentry, a->bdst, dget(a->hidden_dentry));
-		i_lock_priv(h_inode, &ipriv, sb);
+		hi_lock_child(h_inode);
 		err = sio_cpup_single(src_dentry, a->bdst, a->bsrc, -1,
-				      flags_cpup(!CPUP_DTIME, a->parent));
+				      au_flags_cpup(!CPUP_DTIME, a->parent));
 		//err = -1;
-		i_unlock_priv(h_inode, &ipriv);
+		i_unlock(h_inode);
 		set_h_dptr(src_dentry, a->bdst, NULL);
 		set_dbstart(src_dentry, a->bsrc);
 	} else {
 		/* the inode of src_dentry already exists on a.bdst branch */
 		h_dentry = d_find_alias(h_dst_inode);
 		if (h_dentry) {
-			err = hipriv_link(h_dentry, a->hidden_dir,
-					  a->hidden_dentry, sb);
+			err = vfsub_link(h_dentry, a->hidden_dir,
+					 a->hidden_dentry, a->dlgt);
 			dput(h_dentry);
 		} else {
 			IOErr("no dentry found for i%lu on b%d\n",
@@ -390,9 +392,8 @@ int aufs_link(struct dentry *src_dentry, struct inode *dir,
 	a.src_parent = src_dentry->d_parent;
 	a.parent = dentry->d_parent;
 	a.issamedir = (a.src_parent == a.parent);
-	di_write_lock(a.parent);
-	wh_dentry = lock_hdir_lkup_wh(dentry, &dt, src_dentry, !a.issamedir,
-				      &a.ipriv);
+	di_write_lock_parent(a.parent);
+	wh_dentry = lock_hdir_lkup_wh(dentry, &dt, src_dentry, !a.issamedir);
 	//wh_dentry = ERR_PTR(-1);
 	err = PTR_ERR(wh_dentry);
 	if (IS_ERR(wh_dentry))
@@ -406,6 +407,7 @@ int aufs_link(struct dentry *src_dentry, struct inode *dir,
 
 	err = 0;
 	sb = dentry->d_sb;
+	a.dlgt = need_dlgt(sb);
 	a.bsrc = dbstart(src_dentry);
 	a.bdst = dbstart(dentry);
 	if (unlikely(!IS_MS(sb, MS_PLINK))) {
@@ -419,8 +421,8 @@ int aufs_link(struct dentry *src_dentry, struct inode *dir,
 			err = cpup_before_link(src_dentry, dir, &a);
 		if (!err) {
 			hidden_src_dentry = h_dptr(src_dentry);
-			err = hipriv_link(hidden_src_dentry, a.hidden_dir,
-					  a.hidden_dentry, sb);
+			err = vfsub_link(hidden_src_dentry, a.hidden_dir,
+					 a.hidden_dentry, a.dlgt);
 			//err = -1;
 		}
 	} else {
@@ -428,15 +430,16 @@ int aufs_link(struct dentry *src_dentry, struct inode *dir,
 			err = cpup_or_link(src_dentry, &a);
 		else {
 			hidden_src_dentry = h_dptr(src_dentry);
-			err = hipriv_link(hidden_src_dentry, a.hidden_dir,
-					  a.hidden_dentry, sb);
+			err = vfsub_link(hidden_src_dentry, a.hidden_dir,
+					 a.hidden_dentry, a.dlgt);
 			//err = -1;
 		}
 	}
 	if (unlikely(err))
 		goto out_unlock;
 	if (wh_dentry) {
-		err = unlink_wh_dentry(a.hidden_dir, wh_dentry, dentry);
+		err = au_unlink_wh_dentry(a.hidden_dir, wh_dentry, dentry,
+					  a.dlgt);
 		//err = -1;
 		if (unlikely(err))
 			goto out_revert;
@@ -444,7 +447,7 @@ int aufs_link(struct dentry *src_dentry, struct inode *dir,
 
 	dir->i_version++;
 	if (ibstart(dir) == dbstart(dentry))
-		cpup_attr_timesizes(dir);
+		au_cpup_attr_timesizes(dir);
 	if (!d_unhashed(a.hidden_dentry)
 	    /* || hidden_old_inode->i_nlink <= nlink */
 	    /* || SB_NFS(hidden_src_dentry->d_sb) */) {
@@ -466,7 +469,7 @@ int aufs_link(struct dentry *src_dentry, struct inode *dir,
 		DEBUG_ON(a.hidden_dentry->d_parent->d_inode != a.hidden_dir);
 		// do not superio.
 		d = lkup_one(name->name, a.hidden_dentry->d_parent, name->len,
-			     mnt_nfs(sb, a.bdst)??);
+			     mnt_nfs(sb, a.bdst)??, need_dlgt(sb));
 		rerr = PTR_ERR(d);
 		if (IS_ERR(d))
 			goto out_rerr;
@@ -475,7 +478,7 @@ int aufs_link(struct dentry *src_dentry, struct inode *dir,
 		DEBUG_ON(!d->d_inode);
 	}
 #endif
-	rerr = hipriv_unlink(a.hidden_dir, a.hidden_dentry, sb);
+	rerr = vfsub_unlink(a.hidden_dir, a.hidden_dentry, a.dlgt);
 	//rerr = -1;
 	if (!rerr)
 		goto out_dt;
@@ -486,12 +489,12 @@ int aufs_link(struct dentry *src_dentry, struct inode *dir,
 	d_drop(dentry);
 	dtime_revert(&dt, !CPUP_LOCKED_GHDIR);
  out_unlock:
-	hdir_unlock(a.hidden_dir, dir, a.bdst, &a.ipriv);
+	hdir_unlock(a.hidden_dir, dir, a.bdst);
 	if (wh_dentry)
 		dput(wh_dentry);
  out:
 	if (unlikely(err)) {
-		update_dbstart(dentry);
+		au_update_dbstart(dentry);
 		d_drop(dentry);
 	}
 	di_write_unlock(a.parent);
@@ -502,13 +505,12 @@ int aufs_link(struct dentry *src_dentry, struct inode *dir,
 
 int aufs_mkdir(struct inode *dir, struct dentry *dentry, int mode)
 {
-	int err, rerr, diropq;
+	int err, rerr, diropq, dlgt;
 	struct dentry *hidden_dentry, *hidden_parent, *wh_dentry, *parent,
 		*opq_dentry;
 	struct inode *hidden_dir, *hidden_inode;
 	struct dtime dt;
 	aufs_bindex_t bindex;
-	struct aufs_h_ipriv ipriv;
 	struct super_block *sb;
 
 	LKTRTrace("i%lu, %.*s, mode 0%o\n", dir->i_ino, DLNPair(dentry), mode);
@@ -516,9 +518,9 @@ int aufs_mkdir(struct inode *dir, struct dentry *dentry, int mode)
 
 	aufs_read_lock(dentry, AUFS_D_WLOCK);
 	parent = dentry->d_parent;
-	di_write_lock(parent);
+	di_write_lock_parent(parent);
 	wh_dentry = lock_hdir_lkup_wh(dentry, &dt, /*src_dentry*/NULL,
-				      /*do_lock_srcdir*/0, &ipriv);
+				      /*do_lock_srcdir*/0);
 	//wh_dentry = ERR_PTR(-1);
 	err = PTR_ERR(wh_dentry);
 	if (IS_ERR(wh_dentry))
@@ -530,8 +532,9 @@ int aufs_mkdir(struct inode *dir, struct dentry *dentry, int mode)
 	hidden_parent = hidden_dentry->d_parent;
 	hidden_dir = hidden_parent->d_inode;
 	IMustLock(hidden_dir);
+	dlgt = need_dlgt(sb);
 
-	err = vfs_mkdir(hidden_dir, hidden_dentry, mode);
+	err = vfsub_mkdir(hidden_dir, hidden_dentry, mode, dlgt);
 	//err = -1;
 	if (unlikely(err))
 		goto out_unlock;
@@ -540,12 +543,10 @@ int aufs_mkdir(struct inode *dir, struct dentry *dentry, int mode)
 	/* make the dir opaque */
 	diropq = 0;
 	if (unlikely(wh_dentry || IS_MS(sb, MS_ALWAYS_DIROPQ))) {
-		struct aufs_h_ipriv ipriv;
-
-		i_lock_priv(hidden_inode, &ipriv, sb);
-		opq_dentry = create_diropq(dentry, bindex);
+		hi_lock_child(hidden_inode);
+		opq_dentry = create_diropq(dentry, bindex, dlgt);
 		//opq_dentry = ERR_PTR(-1);
-		i_unlock_priv(hidden_inode, &ipriv);
+		i_unlock(hidden_inode);
 		err = PTR_ERR(opq_dentry);
 		if (IS_ERR(opq_dentry))
 			goto out_dir;
@@ -562,12 +563,11 @@ int aufs_mkdir(struct inode *dir, struct dentry *dentry, int mode)
 
 	/* revert */
 	if (unlikely(diropq)) {
-		struct aufs_h_ipriv ipriv;
 		LKTRLabel(revert opq);
-		i_lock_priv(hidden_inode, &ipriv, sb);
-		rerr = remove_diropq(dentry, bindex);
+		hi_lock_child(hidden_inode);
+		rerr = remove_diropq(dentry, bindex, dlgt);
 		//rerr = -1;
-		i_unlock_priv(hidden_inode, &ipriv);
+		i_unlock(hidden_inode);
 		if (rerr) {
 			IOErr("%.*s reverting diropq failed(%d, %d)\n",
 			      DLNPair(dentry), err, rerr);
@@ -577,7 +577,7 @@ int aufs_mkdir(struct inode *dir, struct dentry *dentry, int mode)
 
  out_dir:
 	LKTRLabel(revert dir);
-	rerr = hipriv_rmdir(hidden_dir, hidden_dentry, dir->i_sb);
+	rerr = vfsub_rmdir(hidden_dir, hidden_dentry, dlgt);
 	//rerr = -1;
 	if (rerr) {
 		IOErr("%.*s reverting dir failed(%d, %d)\n",
@@ -587,12 +587,12 @@ int aufs_mkdir(struct inode *dir, struct dentry *dentry, int mode)
 	d_drop(dentry);
 	dtime_revert(&dt, /*fake flag*/CPUP_LOCKED_GHDIR);
  out_unlock:
-	hdir_unlock(hidden_dir, dir, bindex, &ipriv);
+	hdir_unlock(hidden_dir, dir, bindex);
 	if (wh_dentry)
 		dput(wh_dentry);
  out:
 	if (unlikely(err)) {
-		update_dbstart(dentry);
+		au_update_dbstart(dentry);
 		d_drop(dentry);
 	}
 	di_write_unlock(parent);

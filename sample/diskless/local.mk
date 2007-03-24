@@ -17,7 +17,7 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
-# $Id: local.mk,v 1.2 2007/01/08 01:59:05 sfjro Exp $
+# $Id: local.mk,v 1.3 2007/03/12 01:54:56 sfjro Exp $
 
 # call me from main Makefile.
 # installs debian system to a local dir ${DLRoot}.
@@ -43,8 +43,8 @@ ifiles: clean
 	/#/ || /^[[:space:]]*$$/ {next} \
 	{print $$2, $$1}' ${DhcpClients} >> ${hosts}
 	if test -f ${DLModTar};then tar -C ${DLRoot} -xpjf ${DLModTar}; fi
-	cp -p ${MountAufs} ${Auplink} ${Aucpup} ${DLRoot}/sbin
-	chmod 500 ${DLRoot}/sbin/$(notdir ${MountAufs})
+	cp -p ${MountAufs} ${UmountAufs} ${Auplink} ${Aulchown} ${DLRoot}/sbin
+	chmod 500 ${DLRoot}/sbin/$(notdir ${MountAufs} ${UmountAufs} ${Auplink} ${Aulchown})
 
 status: s = ${dpkg_dir}/status
 status: a = ${dpkg_dir}/available
