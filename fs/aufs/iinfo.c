@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: iinfo.c,v 1.24 2007/01/29 02:32:59 sfjro Exp $ */
+/* $Id: iinfo.c,v 1.26 2007/03/19 04:30:31 sfjro Exp $ */
 
 //#include <linux/mm.h>
 #include "aufs.h"
@@ -114,7 +114,7 @@ void aufs_hiput(struct aufs_hinode *hinode)
 		iput(hinode->hi_inode);
 }
 
-unsigned int hi_flags(struct inode *inode, int isdir)
+unsigned int au_hi_flags(struct inode *inode, int isdir)
 {
 	unsigned int flags;
 	struct super_block *sb = inode->i_sb;
@@ -149,7 +149,7 @@ void set_h_iptr(struct inode *inode, aufs_bindex_t bindex,
 		int err;
 		struct super_block *sb = inode->i_sb;
 
-		hinode->hi_id = stobr(sb, bindex)->br_id;
+		hinode->hi_id = sbr_id(sb, bindex);
 		if (flags & AUFS_HI_XINO) {
 			err = xino_write(sb, bindex, val->i_ino, inode->i_ino);
 			if (unlikely(err)) {
@@ -170,7 +170,7 @@ void set_h_iptr(struct inode *inode, aufs_bindex_t bindex,
 }
 
 /* it may be called at remount time, too */
-void update_brange(struct inode *inode, int do_put_zero)
+void au_update_brange(struct inode *inode, int do_put_zero)
 {
 	struct aufs_iinfo *iinfo;
 
@@ -209,7 +209,7 @@ void update_brange(struct inode *inode, int do_put_zero)
 
 /* ---------------------------------------------------------------------- */
 
-int iinfo_init(struct inode *inode)
+int au_iinfo_init(struct inode *inode)
 {
 	struct aufs_iinfo *iinfo;
 	struct super_block *sb;
@@ -233,7 +233,7 @@ int iinfo_init(struct inode *inode)
 	return -ENOMEM;
 }
 
-void iinfo_fin(struct inode *inode)
+void au_iinfo_fin(struct inode *inode)
 {
 	struct aufs_iinfo *iinfo;
 

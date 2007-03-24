@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: finfo.c,v 1.18 2007/01/22 04:00:21 sfjro Exp $ */
+/* $Id: finfo.c,v 1.20 2007/03/19 04:30:31 sfjro Exp $ */
 
 #include "aufs.h"
 
@@ -141,12 +141,12 @@ void set_h_fptr(struct file *file, aufs_bindex_t bindex, struct file *val)
 	//smp_mb();
 }
 
-void update_figen(struct file *file)
+void au_update_figen(struct file *file)
 {
 	atomic_set(&ftofi(file)->fi_generation, digen(file->f_dentry));
 }
 
-void fin_finfo(struct file *file)
+void au_fin_finfo(struct file *file)
 {
 	struct aufs_finfo *finfo;
 	struct dentry *dentry;
@@ -183,7 +183,7 @@ void fin_finfo(struct file *file)
 	si_read_unlock(dentry->d_sb);
 }
 
-int init_finfo(struct file *file)
+int au_init_finfo(struct file *file)
 {
 	struct aufs_finfo *finfo;
 	struct dentry *dentry;
@@ -197,7 +197,7 @@ int init_finfo(struct file *file)
 		finfo->fi_hfile = kcalloc(sbend(dentry->d_sb) + 1,
 					  sizeof(*finfo->fi_hfile), GFP_KERNEL);
 		if (finfo->fi_hfile) {
-			rw_init_wlock(&finfo->fi_rwsem);
+			rw_init_wlock(&finfo->fi_rwsem, AUFS_LSC_FINFO);
 			finfo->fi_bstart = -1;
 			finfo->fi_bend = -1;
 			atomic_set(&finfo->fi_generation, digen(dentry));

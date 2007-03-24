@@ -1,14 +1,19 @@
 
-# $Id: local.mk,v 1.31 2007/02/19 03:25:25 sfjro Exp $
+# $Id: local.mk,v 1.34 2007/03/19 04:29:16 sfjro Exp $
 
 ########################################
-# defaults values, see ./Kconfig.in or ./fs/aufs/Kconfig in detail.
+# default values, see ./fs/aufs/Kconfig after 'make kconfig'
 CONFIG_AUFS = m
 CONFIG_AUFS_FAKE_DM = y
-CONFIG_AUFS_BRANCH_MAX_CHAR = y
-CONFIG_AUFS_BRANCH_MAX_SHORT =
+CONFIG_AUFS_BRANCH_MAX_127 = y
+CONFIG_AUFS_BRANCH_MAX_511 =
+CONFIG_AUFS_BRANCH_MAX_1023 =
+#CONFIG_AUFS_BRANCH_MAX_32767 =
+#CONFIG_AUFS_SYSAUFS = y
 CONFIG_AUFS_HINOTIFY =
-#CONFIG_AUFS_IPRIV_PATCH =
+#CONFIG_AUFS_EXPORT =
+#CONFIG_AUFS_AS_BRANCH =
+#CONFIG_AUFS_DLGT =
 CONFIG_AUFS_LHASH_PATCH =
 CONFIG_AUFS_KSIZE_PATCH =
 CONFIG_AUFS_DEBUG = y
@@ -18,14 +23,28 @@ CONFIG_AUFS_COMPAT =
 AUFS_DEF_CONFIG =
 -include priv_def.mk
 
+# Ubuntu Edgy (2.6.17-10-*)
+# While the kernel in Ubuntu Edgy calls itself as version 2.6.17,
+# super_operations.umount_begin() operation has the interface of
+# linux-2.6.18 actually. It means that the code such like,
+# 	#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,18)
+# will never work correctly.
+# Aufs is trying supporting this version of ubuntu kernel. Try defining
+# UbuntuEdgy17Umount18 in ./local.mk.
+# Honestly speaking, I am not an ubuntu user, and didn't test it by myself.
+#AUFS_DEF_CONFIG = -DUbuntuEdgy17Umount18
+
 define conf
 ifdef $(1)
 AUFS_DEF_CONFIG += -D$(1)
 endif
 endef
 
-$(foreach i, FAKE_DM BRANCH_MAX_CHAR BRANCH_MAX_SHORT HINOTIFY \
-	IPRIV_PATCH LHASH_PATCH DEBUG DEBUG_RWSEM COMPAT, \
+$(foreach i, FAKE_DM BRANCH_MAX_127 BRANCH_MAX_511 BRANCH_MAX_1023 \
+	BRANCH_MAX_32767 \
+	SYSAUFS HINOTIFY EXPORT AS_BRANCH DLGT \
+	LHASH_PATCH \
+	DEBUG DEBUG_RWSEM COMPAT, \
 	$(eval $(call conf,CONFIG_AUFS_$(i))))
 ifeq (${CONFIG_AUFS}, m)
 AUFS_DEF_CONFIG += -DCONFIG_AUFS_MODULE -UCONFIG_AUFS
@@ -61,12 +80,14 @@ fs/aufs/aufs.ko: FORCE
 	${MAKE} -C ${KDIR} M=${CURDIR}/fs/aufs modules
 
 fs/aufs/Kconfig: Kconfig.in
-	@cpp -undef -nostdinc -P -I${KDIR}/include $< | sed -s 's/"#"//' > $@
+	@cpp -undef -nostdinc -P -I${KDIR}/include $< | \
+		sed -e 's/"#"//' -e 's/^[[:space:]]*$$//' | \
+		uniq > $@
 kconfig: fs/aufs/Kconfig
 	@echo copy all ./fs and ./include to your linux kernel source tree.
 	@echo add \'obj-\$$\(CONFIG_AUFS\) += aufs/\' to linux/fs/Makefile.
 	@echo add \'source \"fs/aufs/Kconfig\"\' to linux/fs/Kconfig.
-	@echo then, try \'make menuconfig\'.
+	@echo then, try \'make menuconfig\' and go to Filesystem menu.
 
 ########################################
 

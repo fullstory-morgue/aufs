@@ -16,8 +16,9 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: hinotify.c,v 1.7 2007/02/19 03:27:45 sfjro Exp $ */
+/* $Id: hinotify.c,v 1.11 2007/03/19 04:32:48 sfjro Exp $ */
 
+#include <linux/kthread.h>
 #include "aufs.h"
 
 static struct inotify_handle *in_handle;
@@ -38,8 +39,10 @@ int alloc_hinotify(struct aufs_hinode *hinode, struct inode *inode,
 	if (hin) {
 		hin->hin_aufs_inode = inode;
 		inotify_init_watch(&hin->hin_watch);
+		lockdep_off(); /* inotify doesn't support lockdep */
 		wd = inotify_add_watch(in_handle, &hin->hin_watch, hidden_inode,
 				       in_mask);
+		lockdep_on();
 		if (wd >= 0) {
 			hinode->hi_notify = hin;
 			return 0; /* success */
@@ -62,9 +65,12 @@ void do_free_hinotify(struct aufs_hinode *hinode)
 
 	if (hinode->hi_notify) {
 		err = 0;
-		if (atomic_read(&hinode->hi_notify->hin_watch.count))
+		if (atomic_read(&hinode->hi_notify->hin_watch.count)) {
+			lockdep_off(); /* inotify doesn't support lockdep */
 			err = inotify_rm_watch(in_handle,
 					       &hinode->hi_notify->hin_watch);
+			lockdep_on();
+		}
 		if (!err) {
 			cache_free_hinotify(hinode->hi_notify);
 			hinode->hi_notify = NULL;
@@ -106,45 +112,43 @@ static void ctl_hinotify(struct aufs_hinode *hinode, const __u32 mask)
 #define suspend_hinotify(hi)	ctl_hinotify(hi, 0)
 #define resume_hinotify(hi)	ctl_hinotify(hi, in_mask)
 
-void hdir_lock(struct inode *h_dir, struct inode *dir, aufs_bindex_t bindex,
-	       	struct aufs_h_ipriv *ipriv)
+void do_hdir_lock(struct inode *h_dir, struct inode *dir, aufs_bindex_t bindex,
+		  int lsc)
 {
 	struct aufs_hinode *hinode;
 
-	LKTRTrace("i%lu, b%d\n", dir->i_ino, bindex);
+	LKTRTrace("i%lu, b%d, lsc %d\n", dir->i_ino, bindex, lsc);
 	DEBUG_ON(!S_ISDIR(dir->i_mode));
-
 	hinode = itoii(dir)->ii_hinode + bindex;
 	DEBUG_ON(h_dir != hinode->hi_inode);
-	i_lock_priv(hinode->hi_inode, ipriv, dir->i_sb);
+
+	hi_lock(h_dir, lsc);
 	if (1 /* unlikely(IS_MS(dir->i_sb, MS_UDBA_HINOTIFY) */)
 		suspend_hinotify(hinode);
 }
 
-void hdir_unlock(struct inode *h_dir, struct inode *dir, aufs_bindex_t bindex,
-		 struct aufs_h_ipriv *ipriv)
+void hdir_unlock(struct inode *h_dir, struct inode *dir, aufs_bindex_t bindex)
 {
 	struct aufs_hinode *hinode;
 
 	LKTRTrace("i%lu, b%d\n", dir->i_ino, bindex);
 	DEBUG_ON(!S_ISDIR(dir->i_mode));
-
 	hinode = itoii(dir)->ii_hinode + bindex;
 	DEBUG_ON(h_dir != hinode->hi_inode);
+
 	if (1 /* unlikely(IS_MS(dir->i_sb, MS_UDBA_HINOTIFY) */)
 	    resume_hinotify(hinode);
-	i_unlock_priv(hinode->hi_inode, ipriv);
+	i_unlock(h_dir);
 }
 
 void hdir_lock_rename(struct dentry **h_parents, struct inode **dirs,
-		      aufs_bindex_t bindex, int issamedir,
-		      struct aufs_h_ipriv *iprivs)
+		      aufs_bindex_t bindex, int issamedir)
 {
 	struct aufs_hinode *hinode;
 
 	LKTRTrace("%.*s, %.*s\n", DLNPair(h_parents[0]), DLNPair(h_parents[1]));
 
-	i_lock_rename_priv(h_parents, iprivs, dirs[0]->i_sb);
+	vfsub_lock_rename(h_parents[0], h_parents[1]);
 	hinode = itoii(dirs[0])->ii_hinode + bindex;
 	DEBUG_ON(h_parents[0]->d_inode != hinode->hi_inode);
 	suspend_hinotify(hinode);
@@ -156,8 +160,7 @@ void hdir_lock_rename(struct dentry **h_parents, struct inode **dirs,
 }
 
 void hdir_unlock_rename(struct dentry **h_parents, struct inode **dirs,
-			aufs_bindex_t bindex, int issamedir,
-			struct aufs_h_ipriv *iprivs)
+			aufs_bindex_t bindex, int issamedir)
 {
 	struct aufs_hinode *hinode;
 
@@ -171,10 +174,10 @@ void hdir_unlock_rename(struct dentry **h_parents, struct inode **dirs,
 		DEBUG_ON(h_parents[1]->d_inode != hinode->hi_inode);
 		resume_hinotify(hinode);
 	}
-	i_unlock_rename_priv(h_parents, iprivs);
+	vfsub_unlock_rename(h_parents[0], h_parents[1]);
 }
 
-void reset_hinotify(struct inode *inode, unsigned int flags)
+void au_reset_hinotify(struct inode *inode, unsigned int flags)
 {
 	aufs_bindex_t bindex, bend;
 	struct inode *hi;
@@ -182,13 +185,15 @@ void reset_hinotify(struct inode *inode, unsigned int flags)
 	LKTRTrace("i%lu, 0x%x\n", inode->i_ino, flags);
 
 	bend = ibend(inode);
-	for (bindex = 0; bindex <= bend; bindex++) {
+	for (bindex = ibstart(inode); bindex <= bend; bindex++) {
 		hi = h_iptr_i(inode, bindex);
 		if (hi) {
+			//hi_lock(hi, AUFS_LSC_H_CHILD);
 			igrab(hi);
 			set_h_iptr(inode, bindex, NULL, 0);
 			set_h_iptr(inode, bindex, igrab(hi), flags);
 			iput(hi);
+			//i_unlock(hi);
 		}
 	}
 }
@@ -253,12 +258,83 @@ static int reval_child(const char *name, struct dentry *parent)
 
 			// todo: the i_nlink of newly created name by link(2)
 			// should be updated
-			// todo: some nfs dentry doesn't notifyed at deleteing
+			// todo: some nfs dentry doesn't notified at deleteing
 			break;
 		}
 	}
 
 	TraceErr(err);
+	return err;
+}
+
+struct reset_dirino_args {
+	struct dentry *parent;
+	char *name;
+	struct inode *h_inode;
+};
+
+// todo: test
+static int reset_dirino(void *args)
+{
+	int err;
+	struct reset_dirino_args *a = args;
+	struct inode *inode, *dir = a->parent->d_inode;
+	struct dentry *child;
+	aufs_bindex_t bindex, bend, new_bstart;
+	struct super_block *sb = a->parent->d_sb;
+	struct lkup_args lkup = {
+		.nfsmnt	= NULL,
+		.dlgt	= need_dlgt(sb)
+	};
+
+	LKTRTrace("%s\n", a->name);
+
+	i_lock(dir);
+	child = lkup_one(a->name, a->parent, strlen(a->name), &lkup);
+	i_unlock(dir);
+	err = PTR_ERR(child);
+	if (unlikely(!child || IS_ERR(child)))
+		goto out;
+
+	/* reset ino */
+	err = 0;
+	aufs_read_lock(child, AUFS_I_WLOCK);
+	inode = child->d_inode;
+	if (unlikely(!inode))
+		goto out_drop;
+
+	new_bstart = -1;
+	bend = ibend(inode);
+	for (bindex = ibstart(inode); bindex <= bend; bindex++) {
+		struct inode *h_inode;
+		h_inode = h_iptr_i(inode, bindex);
+		if (unlikely(!h_inode))
+			continue;
+		if (h_inode != a->h_inode) {
+			ino_t ino = h_inode->i_ino;
+			set_h_iptr(inode, bindex, NULL, /*flags*/0);
+			xino_write(sb, bindex, ino, 0);
+			/* ignore an error */
+		} else
+			new_bstart = bindex;
+	}
+	if (new_bstart != -1) {
+		set_ibend(inode, new_bstart);
+		set_ibstart(inode, new_bstart);
+	}
+
+ out_drop:
+	d_drop(child);
+	aufs_read_unlock(child, AUFS_I_WLOCK);
+	dput(child);
+ out:
+	iput(a->h_inode);
+	kfree(a->name);
+	dput(a->parent);
+	kfree(a);
+	if (unlikely(err))
+		IOErr("err %d\n", err);
+	do_exit(err);
 	return err;
 }
 
@@ -269,6 +345,8 @@ static void aufs_inotify(struct inotify_watch *watch, u32 wd, u32 mask,
 	struct aufs_hinotify *hinotify;
 	struct inode *inode;
 	struct dentry *parent;
+	struct super_block *sb;
+	struct aufs_vdir *vdir;
 
 	LKTRTrace("wd %d, mask 0x%x %s, cookie 0x%x, name %s, hi%lu\n",
 		  wd, mask, in_name(mask), cookie,
@@ -285,10 +363,20 @@ static void aufs_inotify(struct inotify_watch *watch, u32 wd, u32 mask,
 	}
 
 #ifdef DbgInotify
-	Dbg("wd %d, mask 0x%x %s, cookie 0x%x, name %s, hi%lu\n",
-		  wd, mask, in_name(mask), cookie,
-		  name, hidden_inode ? hidden_inode->i_ino : 0);
-	//WARN_ON(1);
+// todo: remove this
+#ifdef CONFIG_AUFS_DEBUG_RWSEM
+	BUILD_BUG_ON(1);
+#endif
+	{
+		static pid_t last;
+		if (1 || last != current->pid) {
+			Dbg("wd %d, mask 0x%x %s, cookie 0x%x, name %s, hi%lu\n",
+			    wd, mask, in_name(mask), cookie, name,
+			    hidden_inode ? hidden_inode->i_ino : 0);
+			WARN_ON(1);
+			last = current->pid;
+		}
+	}
 #endif
 
 	// todo: try parent = d_find_alias(inode);
@@ -300,39 +388,62 @@ static void aufs_inotify(struct inotify_watch *watch, u32 wd, u32 mask,
 		reval_child(name, parent);
 	spin_unlock(&dcache_lock);
 
+	sb = inode->i_sb;
+#if 1 //def DbgInotify
+	lockdep_off();
+#endif
+	aufs_read_lock(parent, AUFS_I_WLOCK);
+// todo: stop unnecessary update
+	vdir = ivdir(inode);
+	if (vdir)
+		vdir->vd_jiffy = 0;
+
 	/*
 	 * special handling root directory,
 	 * sine d_revalidate may not be called later.
 	 * main purpose is maintaining i_nlink.
 	 */
 	if (unlikely(IS_ROOT(parent))) {
-		int locked;
-		//Dbg("here\n");
-		//WARN_ON(1);
-		// todo: this is a bug. fix it.
-		locked = ii_is_write_lock(inode);
-		if (!locked) {
-			ii_write_unlock(inode);
-			aufs_read_lock(parent, AUFS_D_WLOCK);
-			//ii_read_lock(inode);
-		}
 		atomic_set(&dtodi(parent)->di_reval, 0);
-		cpup_attr_all(inode);
-		if (!locked)
-			//ii_read_unlock(inode);
-			aufs_read_unlock(parent, AUFS_D_WLOCK);
+		/* this condition is not correct. but its ok for a while */
+		if (hidden_inode && sbr_sb(sb, 0) == hidden_inode->i_sb)
+			au_cpup_attr_all(inode);
 	}
-
-#if 0
-	if (dentry) {
-		struct aufs_vdir *vdir;
-		aufs_read_lock(dentry, AUFS_D_WLOCK);
-		vdir = ivdir(inode);
-		if (vdir)
-			vdir->vd_jiffy = 0;
-		aufs_read_unlock(dentry, AUFS_D_WLOCK);
-	}
+	aufs_read_unlock(parent, AUFS_I_WLOCK);
+#if 1 //def DbgInotify
+	lockdep_on();
 #endif
+
+	/* reset xino for hidden directories */
+	if (unlikely(hidden_inode
+		     && S_ISDIR(hidden_inode->i_mode)
+		     && (mask & IN_MOVED_FROM)
+		     && IS_MS(sb, MS_XINO))) {
+		int err;
+		static DECLARE_WAIT_QUEUE_HEAD(wq);
+		struct task_struct *tsk;
+		struct reset_dirino_args *args;
+
+		err = -ENOMEM;
+		args = kmalloc(sizeof(*args), GFP_KERNEL);
+		if (unlikely(!args))
+			goto out;
+		args->name = kstrdup(name, GFP_KERNEL);
+		if (unlikely(!args->name)) {
+			kfree(args);
+			goto out;
+		}
+
+		args->parent = dget(parent);
+		args->h_inode = igrab(hidden_inode);
+		smp_mb();
+		wait_event(wq, !IS_ERR(tsk = kthread_run
+				       (reset_dirino, args,
+					AUFS_NAME "_reset_dirino")));
+		return;
+	out:
+		Err("failed resetting dir ino(%d)\n", err);
+	}
 }
 
 static void aufs_inotify_destroy(struct inotify_watch *watch)

@@ -16,11 +16,11 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: inode.c,v 1.14 2007/01/29 02:32:59 sfjro Exp $ */
+/* $Id: inode.c,v 1.16 2007/03/19 04:31:46 sfjro Exp $ */
 
 #include "aufs.h"
 
-int refresh_hinode(struct dentry *dentry)
+int au_refresh_hinode(struct dentry *dentry)
 {
 	int err, new_sz, update, isdir;
 	struct inode *inode, *first;
@@ -84,7 +84,7 @@ int refresh_hinode(struct dentry *dentry)
 	}
 
 	isdir = S_ISDIR(inode->i_mode);
-	flags = hi_flags(inode, isdir);
+	flags = au_hi_flags(inode, isdir);
 	bend = dbend(dentry);
 	for (bindex = dbstart(dentry); bindex <= bend; bindex++) {
 		struct inode *hi;
@@ -124,7 +124,7 @@ int refresh_hinode(struct dentry *dentry)
 		}
 
 	if (first != h_iptr(inode))
-		cpup_attr_all(inode);
+		au_cpup_attr_all(inode);
 	if (update && isdir)
 		inode->i_version++;
 	// smp_mb();
@@ -145,7 +145,7 @@ static int set_inode(struct inode *inode, struct dentry *dentry)
 	unsigned int flags;
 
 	LKTRTrace("i%lu, %.*s\n", inode->i_ino, DLNPair(dentry));
-	IMustLock(inode);
+	//IMustLock(inode);
 	IiMustWriteLock(inode);
 	hidden_dentry = h_dptr(dentry);
 	DEBUG_ON(!hidden_dentry);
@@ -183,7 +183,7 @@ static int set_inode(struct inode *inode, struct dentry *dentry)
 		goto out;
 	}
 
-	flags = hi_flags(inode, isdir);
+	flags = au_hi_flags(inode, isdir);
 	iinfo = itoii(inode);
 	iinfo->ii_bstart = bstart;
 	iinfo->ii_bend = btail;
@@ -194,7 +194,7 @@ static int set_inode(struct inode *inode, struct dentry *dentry)
 		DEBUG_ON(!hidden_dentry->d_inode);
 		set_h_iptr(inode, bindex, igrab(hidden_dentry->d_inode), flags);
 	}
-	cpup_attr_all(inode);
+	au_cpup_attr_all(inode);
 
  out:
 	TraceErr(err);
@@ -228,7 +228,8 @@ struct inode *aufs_new_inode(struct dentry *dentry)
 		goto out;
 
 	err = -ENOMEM;
-	inode = iget(sb, ino);
+	//inode = iget(sb, ino);
+	inode = iget_locked(sb, ino);
 	if (unlikely(!inode))
 		goto out;
 	err = PTR_ERR(inode);
@@ -237,14 +238,17 @@ struct inode *aufs_new_inode(struct dentry *dentry)
 	err = -ENOMEM;
 	if (unlikely(is_bad_inode(inode)))
 		goto out_iput;
+	if (inode->i_state & I_NEW)
+		sb->s_op->read_inode(inode);
 
 	err = 0;
-	i_lock(inode);
-	ii_write_lock(inode);
+	//i_lock_new(inode);
+	ii_write_lock_new(inode);
 	bindex = ibstart(inode);
-	if (atomic_read(&inode->i_count) < 2) {
+	if (inode->i_state & I_NEW) {
 		err = set_inode(inode, dentry);
 		//err = -1;
+		unlock_new_inode(inode);
 #if 1 // test
 	} else if (unlikely(bindex >= 0 && IS_MS(sb, MS_UDBA_INOTIFY))) {
 		int found = 0;
@@ -253,7 +257,7 @@ struct inode *aufs_new_inode(struct dentry *dentry)
 			found = (hidden_inode == h_iptr_i(inode, bindex));
 		if (unlikely(!found)) {
 			ii_write_unlock(inode);
-			i_unlock(inode);
+			//i_unlock(inode);
 			iput(inode);
 			err = xino_write(sb, bstart, hidden_ino, /*ino*/0);
 			if (unlikely(err))
@@ -262,7 +266,7 @@ struct inode *aufs_new_inode(struct dentry *dentry)
 		}
 #endif
 	}
-	i_unlock(inode);
+	//i_unlock(inode);
 	if (!err)
 		return inode; /* success */
 

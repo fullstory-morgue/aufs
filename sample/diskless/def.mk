@@ -17,17 +17,20 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
-# $Id: def.mk,v 1.2 2007/01/08 01:56:56 sfjro Exp $
+# $Id: def.mk,v 1.3 2007/03/12 01:54:55 sfjro Exp $
 
 # kernel for diskless machines
-KVer = 2619jrousDL
-#KVer = 2618jrousDL
+KVer = 2.6.20jrousDL
+#KVer = 2.6.20-rc3jrousDL
+#KVer = 2.6.19jrousDL
+#KVer = 2.6.18jrousDL
 DLKernel = ${CURDIR}/vmlinuz-${KVer}
 DLModTar = ${CURDIR}/kmod-${KVer}.tar.bz2
 
 # aufs
 AufsKo = ${CURDIR}/../../aufs.ko
 MountAufs = ${CURDIR}/../../util/mount.aufs
+UmountAufs = ${CURDIR}/../../util/umount.aufs
 Auplink = ${CURDIR}/../../util/auplink
 Aulchown = ${CURDIR}/../../util/aulchown
 
@@ -35,6 +38,7 @@ Aulchown = ${CURDIR}/../../util/aulchown
 
 # retrieve debian packages
 DebVer = sarge
+#DebVer = etch
 DebServer = ftp://ftp.debian.org
 DebComp = main
 
@@ -61,6 +65,43 @@ InstPkg = ${DebugPkg} bzip2 cvs gawk lynx module-init-tools nfs-common portmap s
 RetrPkg = emacs21 ssh
 
 ########################################
+# slax
+
+NfsCdKoFull = $(addprefix lib/modules/${KVer}/kernel/, \
+	drivers/block/loop.ko fs/isofs/isofs.ko fs/nls/nls_base.ko fs/nls/nls_iso8859-1.ko)
+
+NfsSlax = /ext2/diskless/slax
+SlaxUrl1 = http://merlin.fit.vutbr.cz/mirrors/slax/SLAX-6.x
+SlaxUrl = ${SlaxUrl1}/testing/slax-6.0.0pre10.iso
+SlaxKoFull = ${NfsCdKoFull}
+SlaxKo = $(notdir ${SlaxKoFull}) unlzma.ko sqlzma.ko squashfs.ko
+
+########################################
+# knoppix
+
+NfsKnoppix = /ext2/diskless/knoppix
+KnoppixUrl = ftp://ftp.planetmirror.com/pub/knoppix/KNOPPIX_V5.1.1CD-2007-01-04-EN.iso
+KnoppixKoFull = ${NfsCdKoFull}
+KnoppixKo = $(notdir ${KnoppixKoFull}) cloop.ko
+
+########################################
+# gentoo
+
+NfsGentoo = /ext2/diskless/gentoo
+GentooUrl1 = ftp://gentoo.mirrors.tds.net/pub/gentoo/releases/x86/2006.1/livecd
+GentooUrl = ${GentooUrl1}/livecd-i686-installer-2006.1.iso
+GentooKoFull = ${NfsCdKoFull}
+GentooKo = $(notdir ${GentooKoFull}) unlzma.ko sqlzma.ko squashfs.ko
+
+########################################
+# ubuntu edgy
+
+NfsEdgy = /ext2/diskless/edgy
+EdgyUrl = ftp://ftp.ecc.u-tokyo.ac.jp/UBUNTU-CDS/edgy/ubuntu-6.10-desktop-i386.iso
+EdgyKoFull = ${NfsCdKoFull}
+EdgyKo = $(notdir ${EdgyKoFull}) unlzma.ko sqlzma.ko squashfs.ko
+
+########################################
 
 # seed of dhcpdDL.conf
 DhcpdDLConfIn = dhcpdDL.conf.in
@@ -83,3 +124,4 @@ InitrdExtCmd = bootpc insmod mount portmap
 
 # dirs in initrd, just prepare them
 BranchDirs = hostA hostB hostC http smtp ftp common root
+BranchDirs += cdrom slax knoppix gentoo edgy

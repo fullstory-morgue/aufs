@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: file.h,v 1.18 2007/02/19 03:27:35 sfjro Exp $ */
+/* $Id: file.h,v 1.20 2007/03/19 04:30:31 sfjro Exp $ */
 
 #ifndef __AUFS_FILE_H__
 #define __AUFS_FILE_H__
@@ -55,10 +55,12 @@ struct aufs_finfo {
 	};
 };
 
-#define fi_read_lock(f)		rw_read_lock(&ftofi(f)->fi_rwsem)
+#define fi_read_lock(f) \
+	rw_read_lock(&ftofi(f)->fi_rwsem, AUFS_LSC_FINFO)
 #define fi_read_unlock(f)	rw_read_unlock(&ftofi(f)->fi_rwsem)
 #define fi_downgrade_lock(f)	rw_dgrade_lock(&ftofi(f)->fi_rwsem)
-#define fi_write_lock(f)	rw_write_lock(&ftofi(f)->fi_rwsem)
+#define fi_write_lock(f) \
+	rw_write_lock(&ftofi(f)->fi_rwsem, AUFS_LSC_FINFO)
 #define fi_write_unlock(f)	rw_write_unlock(&ftofi(f)->fi_rwsem)
 
 /* debug macro. use with caution */
@@ -81,15 +83,15 @@ struct aufs_finfo {
 /* ---------------------------------------------------------------------- */
 
 extern struct address_space_operations aufs_aop;
-unsigned int file_roflags(unsigned int flags);
+unsigned int au_file_roflags(unsigned int flags);
 struct file *hidden_open(struct dentry *dentry, aufs_bindex_t bindex,
 			 int flags);
-int do_open(struct inode *inode, struct file *file,
-	    int (*open)(struct file *file, int flags));
-int reopen_nondir(struct file *file);
-int ready_to_write(struct file *file, loff_t len);
-int reval_and_lock_finfo(struct file *file, int (*reopen)(struct file *file),
-			 int wlock, int locked);
+int au_do_open(struct inode *inode, struct file *file,
+	       int (*open)(struct file *file, int flags));
+int au_reopen_nondir(struct file *file);
+int au_ready_to_write(struct file *file, loff_t len);
+int au_reval_and_lock_finfo(struct file *file, int (*reopen)(struct file *file),
+			    int wlock, int locked);
 
 //f_op.c
 extern struct file_operations aufs_file_fop;
@@ -112,10 +114,10 @@ void set_fbstart(struct file *file, aufs_bindex_t bindex);
 void set_fbend(struct file *file, aufs_bindex_t bindex);
 void set_fvdir_cache(struct file *file, struct aufs_vdir *vdir_cache);
 void set_h_fptr(struct file *file, aufs_bindex_t bindex, struct file *h_file);
-void update_figen(struct file *file);
+void au_update_figen(struct file *file);
 
-void fin_finfo(struct file *file);
-int init_finfo(struct file *file);
+void au_fin_finfo(struct file *file);
+int au_init_finfo(struct file *file);
 
 #endif /* __KERNEL__ */
 #endif /* __AUFS_FILE_H__ */

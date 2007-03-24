@@ -3,7 +3,7 @@
 .SH NAME
 diskless \- aufs sample for management of diskless machines
 
-.\" $Id: diskless.6aufs,v 1.2 2007/01/08 01:58:50 sfjro Exp $
+.\" $Id: diskless.6aufs,v 1.3 2007/03/12 01:54:55 sfjro Exp $
 
 .\" ----------------------------------------------------------------------
 .SH Introduction
@@ -14,7 +14,7 @@ them can be diskless, dataless or systemless.
 You need at least one essential internal server which
 has disk and serves PXE, TFTP, DHCP and NFS (or nbd/enbd/iSCSI/AOE) to the
 Web/Mail/Ftp servers.
-The Web/Mail/Ftp servers boot with PXE, TFTP, DHCP, then mount serveral NFS
+The Web/Mail/Ftp servers boot with PXE, TFTP, DHCP, then mount several NFS
 (or local filesystems, or nbd/enbd/iSCSI/AOE), and finally build aufs as the
 root filesystem. The users will access these Web/Mail/Ftp servers through
 network.
@@ -24,7 +24,7 @@ example, you can use any live-cd image as base system.
 
 .\" ----------------------------------------------------------------------
 .SH Warning
-While I am trying to be safe and sure, there is no gurantee. For example,
+While I am trying to be safe and sure, there is no guarantee. For example,
 'make local' installs a Debian system under a local directory using chroot. If
 there was a bug, it might install something to your real root directory. Be
 careful when you modify these files.
@@ -42,7 +42,7 @@ In this scenario, I use a single machine, a Debian system.
 .ds IClient InternalClient
 .SS The real server or the internal client (\*[IClient])
 It is a diskless (in this scenario) linux, boot by PXE and TFTP which
-retrives data from \*[IServer], get its IP address by DHCP, mount
+retrieves data from \*[IServer], get its IP address by DHCP, mount
 several NFS, and serves HTTP, SMTP, FTP or anything else you set.
 
 .SS The real client or the user
@@ -72,14 +72,14 @@ There is a caution using nbd/enbd. Since they use a daemon in userspace,
 \*[IClient] may meet some troubles at shutdown time.
 
 In this sample, I use Debian Sarge system, and will try Debian Etch and Sid
-too. While to retrive and to install locally are large part of this sample, if
+too. While to retrieve and to install locally are large part of this sample, if
 your installer supports them natively, or you already have a whole system
 directory tree
 which can be exported, you can skip "make retr local".
 
 .\" ----------------------------------------------------------------------
 .SH Linux-2.6.19 NFS bug?
-When you export a directory as writable and it has two sub-direcotries dirA
+When you export a directory as writable and it has two sub-directories dirA
 and dirB, a NFS client before linux-2.6.19 can mount them correctly like this,
 .nf
 # mount -o ro server:/expdir/dirA /ro
@@ -92,7 +92,7 @@ mount option. Additionally, after mounting dirA and dirB, if you remount one
 of them as readonly (or readwrite), the other will be changed too.
 
 You need to place dirA and dirB on different filesystems on NFS server, in order
-to prevent linux-2.6.19 NFS client from this behaivour.
+to prevent linux-2.6.19 NFS client from this behaviour.
 I don't know it is a bug or not.
 
 .\" ----------------------------------------------------------------------
@@ -123,7 +123,7 @@ kernel (DLKernel) will be copied to tftp root dir by 'make tftp'.
 
 .\" ----------------------------------------------------------------------
 .SH Retrive and spool the packages
-The task preparing \*[IServer] may be repeated one, which includes retriving
+The task preparing \*[IServer] may be repeated one, which includes retrieving
 many
 packages and locally installing. Not to waste our time, these tasks are
 designed and implemented separately. Read the makefiles and try 'make retr'
@@ -142,7 +142,7 @@ directory specified by DLRoot in def.mk by 'make local'.
 The packages selected by a normal
 Debian installer will be installed automatically. If you want to add or remove
 some packages, set UninstPkg and InstPkg in def.mk.
-If you want to retrive some packages but do not want to install now, set
+If you want to retrieve some packages but do not want to install now, set
 RetrPkg.
 
 To let aufs work correctly, it is recommended to install /sbin/mount.aufs.
@@ -154,7 +154,7 @@ You will need to write some important files manually, such as /etc/fstab,
 'make local' copies all files under 'ifiles' to DLRoot.
 
 .SS custom.sh and preseed.sh
-Debian package have a nice feature called pre-configuretion or
+Debian package have a nice feature called pre-configuration or
 pre-seeding. The preseed.sh in this sample is a simple script which does
 nothing but preseeding. The local.sh script calls it a few times. You can
 modify preseed.sh as you like, to suit your environment.
@@ -173,15 +173,15 @@ A simple but powerful binary named busybox is commonly used in initrd. 'make
 initrd' in this sample retrieves busybox Debian package which is specified by
 BusyBoxPkg in def.mk, extract the binary and build a cramfs initrd image file.
 Also initrd should have some directories for aufs and its branches mount
-point. The branch direcotires should be specified by BranchDirs in def.mk.
+point. The branch directories should be specified by BranchDirs in def.mk.
 
 If you want to include some commands other than busybox, set InitrdExtCmd in
-def.mk. 'make initrd' will find the binary and the neccessary shared
+def.mk. 'make initrd' will find the binary and the necessary shared
 libraries on the running system, and then copy them into initrd image file.
 
 .SS linuxrc and comount.sh
 In this sample, linuxrc file is very simple since the actual mount process is
-executed in another script, called comount.sh. The linuxrc retrives aufs.ko
+executed in another script, called comount.sh. The linuxrc retrieves aufs.ko
 and comount.sh via TFTP, and execute them.
 
 "make initrd tftp" will build the initrd file and copy it to the TFTP root
@@ -212,6 +212,27 @@ to TFTP dir by 'make tftp'. You can edit it anyway you like.
 The pxelinux.0 file under TFTP dir will be retrieved by PXE program in your
 diskless machines at its boot time. This file is extracted from the Debian
 installer. Probably you don't need to set DebInstaller in def.mk.
+
+.\" ----------------------------------------------------------------------
+
+.SH live cd on nfs, slax, knoppix and gentoo
+This sample also support slax, knoppix and gentoo cdrom on NFS. Slax
+and knoopix distributions already supported aufs and it is very easy
+to try them with NFS. Hers is simple instructions.
+
+1. define the variables in def.mk, for slax, knoppix and gentoo
+
+2. build your kernel and modules. and copy them to this directory.
+This sample uses squashfs3.2-r2 and sqlzma patch from
+http://www.squashfs-lzma.org as slax does.
+
+3. customize pxe.conf and comount.sh if you need it.
+
+4. run 'make slax tftp', 'make knoppix tftp' or 'make gentoo tftp'.
+it will make the directory, and retrieve the cdrom image and the necessary
+kernel modules to the directory.
+
+5. boot up your diskless NFS client.
 
 .\" ----------------------------------------------------------------------
 .SH COPYRIGHT

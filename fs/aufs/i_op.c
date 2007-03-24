@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: i_op.c,v 1.24 2007/02/19 03:27:56 sfjro Exp $ */
+/* $Id: i_op.c,v 1.27 2007/03/19 04:31:31 sfjro Exp $ */
 
 //#include <linux/fs.h>
 //#include <linux/namei.h>
@@ -24,9 +24,22 @@
 #include <asm/uaccess.h>
 #include "aufs.h"
 
+struct security_inode_permission_args {
+	int *errp;
+	struct inode *h_inode;
+	int mask;
+	struct nameidata *fake_nd;
+};
+
+void call_security_inode_permission(void *args)
+{
+	struct security_inode_permission_args *a = args;
+	LKTRTrace("fsuid %d\n", current->fsuid);
+	*a->errp = security_inode_permission(a->h_inode, a->mask, a->fake_nd);
+}
+
 static int hidden_permission(struct inode *hidden_inode, int mask,
-			     struct nameidata *fake_nd, int brperm,
-			     struct super_block *sb)
+			     struct nameidata *fake_nd, int brperm, int dlgt)
 {
 	int err, submask;
 	const int write_mask = (mask & (MAY_WRITE | MAY_APPEND));
@@ -42,17 +55,33 @@ static int hidden_permission(struct inode *hidden_inode, int mask,
 	submask = mask & ~MAY_APPEND;
 	if (unlikely((write_mask && !(brperm & MAY_WRITE))
 		     || !hidden_inode->i_op
-		     || !hidden_inode->i_op->permission))
+		     || !hidden_inode->i_op->permission)) {
+		//LKTRLabel(generic_permission);
 		err = generic_permission(hidden_inode, submask, NULL);
-	else {
+	} else {
+		//LKTRLabel(h_inode->permission);
 		err = hidden_inode->i_op->permission(hidden_inode, submask,
 						     fake_nd);
 		TraceErr(err);
 	}
 
 #if 1
-	if (!err && !IS_MS(sb, MS_IPRIVATE))
-		err = security_inode_permission(hidden_inode, mask, fake_nd);
+	if (!err) {
+		// todo: refine it
+		if (!dlgt)
+			err = security_inode_permission(hidden_inode, mask,
+							fake_nd);
+		else {
+			struct security_inode_permission_args args = {
+				.errp		= &err,
+				.h_inode	= hidden_inode,
+				.mask		= mask,
+				.fake_nd	= fake_nd
+			};
+			wkq_wait(call_security_inode_permission, &args,
+				 /*dlgt*/1);
+		}
+	}
 #endif
 
  out:
@@ -69,17 +98,17 @@ static int silly_lock(struct inode *inode, struct nameidata *nd)
 
 #ifdef CONFIG_AUFS_FAKE_DM
 	si_read_lock(sb);
-	ii_read_lock(inode);
+	ii_read_lock_child(inode);
 #else
 	if (!nd || !nd->dentry) {
 		si_read_lock(sb);
-		ii_read_lock(inode);
+		ii_read_lock_child(inode);
 	} else if (nd->dentry->d_inode != inode) {
 		locked = 1;
 		/* lock child first, then parent */
 		si_read_lock(sb);
-		ii_read_lock(inode);
-		di_read_lock(nd->dentry, 0);
+		ii_read_lock_child(inode);
+		di_read_lock_parent(nd->dentry, 0);
 	} else {
 		locked = 2;
 		aufs_read_lock(nd->dentry, AUFS_I_RLOCK);
@@ -119,7 +148,7 @@ static void silly_unlock(int locked, struct inode *inode, struct nameidata *nd)
 
 static int aufs_permission(struct inode *inode, int mask, struct nameidata *nd)
 {
-	int err, locked;
+	int err, locked, dlgt;
 	aufs_bindex_t bindex, bend;
 	struct inode *hidden_inode;
 	struct super_block *sb;
@@ -127,11 +156,14 @@ static int aufs_permission(struct inode *inode, int mask, struct nameidata *nd)
 	const int write_mask = (mask & (MAY_WRITE | MAY_APPEND));
 	const int nondir = !S_ISDIR(inode->i_mode);
 
-	LKTRTrace("ino %lu, mask 0x%x, nondir %d, write_mask %d\n",
-		  inode->i_ino, mask, nondir, write_mask);
+	LKTRTrace("ino %lu, mask 0x%x, nondir %d, write_mask %d, "
+		  "nd %p{%p, %p}\n",
+		  inode->i_ino, mask, nondir, write_mask,
+		  nd, nd ? nd->dentry : NULL, nd ? nd->mnt : NULL);
 
 	sb = inode->i_sb;
 	locked = silly_lock(inode, nd);
+	dlgt = need_dlgt(sb);
 
 	if (nd)
 		fake_nd = *nd;
@@ -148,7 +180,7 @@ static int aufs_permission(struct inode *inode, int mask, struct nameidata *nd)
 			DEBUG_ON(PTR_ERR(p) != -ENOENT);
 		else {
 			err = hidden_permission(hidden_inode, mask, p,
-						sbr_perm(sb, bindex), sb);
+						sbr_perm(sb, bindex), dlgt);
 			fake_dm_release(p);
 		}
 		if (write_mask && !err) {
@@ -169,12 +201,12 @@ static int aufs_permission(struct inode *inode, int mask, struct nameidata *nd)
 		DEBUG_ON(!S_ISDIR(hidden_inode->i_mode));
 
 		p = fake_dm(&fake_nd, nd, sb, bindex);
-		/* actual test will be delegated LSM */
+		/* actual test will be delegated to LSM */
 		if (IS_ERR(p))
 			DEBUG_ON(PTR_ERR(p) != -ENOENT);
 		else {
 			err = hidden_permission(hidden_inode, mask, p,
-						sbr_perm(sb, bindex), sb);
+						sbr_perm(sb, bindex), dlgt);
 			fake_dm_release(p);
 		}
 	}
@@ -200,7 +232,7 @@ static struct dentry *aufs_lookup(struct inode *dir, struct dentry *dentry,
 
 	parent = dentry->d_parent; // dget_parent()
 	aufs_read_lock(parent, !AUFS_I_RLOCK);
-	err = alloc_dinfo(dentry);
+	err = au_alloc_dinfo(dentry);
 	//if (LktrCond) err = -1;
 	ret = ERR_PTR(err);
 	if (unlikely(err))
@@ -267,7 +299,7 @@ int wr_dir(struct dentry *dentry, int add_entry, struct dentry *src_dentry,
 		}
 		if (test_ro(sb, bcpup, dentry->d_inode)) {
 			if (!add_entry)
-				di_read_lock(parent, !AUFS_I_RLOCK);
+				di_read_lock_parent(parent, !AUFS_I_RLOCK);
 			bcpup = err = find_rw_parent_br(dentry, bcpup);
 			//bcpup = err = find_rw_br(sb, bcpup);
 			if (!add_entry)
@@ -293,30 +325,29 @@ int wr_dir(struct dentry *dentry, int add_entry, struct dentry *src_dentry,
 		src_parent = src_dentry->d_parent; // dget_parent()
 		src_dir = src_parent->d_inode;
 		if (do_lock_srcdir)
-			di_write_lock(src_parent);
+			di_write_lock_parent2(src_parent);
 	}
 
 	dir = parent->d_inode;
 	if (add_entry) {
-		update_dbstart(dentry);
+		au_update_dbstart(dentry);
 		IMustLock(dir);
 		DiMustWriteLock(parent);
 		IiMustWriteLock(dir);
 	} else
-		di_write_lock(parent);
+		di_write_lock_parent(parent);
 
 	err = 0;
 	if (!h_dptr_i(parent, bcpup))
 		err = cpup_dirs(dentry, bcpup, src_parent);
 	//err = -1;
 	if (!err && add_entry) {
-		struct aufs_h_ipriv ipriv;
 		hidden_parent = h_dptr_i(parent, bcpup);
 		DEBUG_ON(!hidden_parent || !hidden_parent->d_inode);
-		i_lock_priv(hidden_parent->d_inode, &ipriv, parent->d_sb);
+		hi_lock_parent(hidden_parent->d_inode);
 		err = lkup_neg(dentry, bcpup);
 		//err = -1;
-		i_unlock_priv(hidden_parent->d_inode, &ipriv);
+		i_unlock(hidden_parent->d_inode);
 	}
 
 	if (!add_entry)
@@ -337,10 +368,8 @@ static int aufs_setattr(struct dentry *dentry, struct iattr *ia)
 {
 	int err, isdir;
 	aufs_bindex_t bstart, bcpup;
-	struct inode *hidden_inode, *inode, *dir, *h_dir;
+	struct inode *hidden_inode, *inode, *dir, *h_dir, *gh_dir, *gdir;
 	struct dentry *hidden_dentry, *parent;
-	enum {PARENT, CHILD};
-	struct aufs_h_ipriv ipriv[2];
 	unsigned int udba;
 
 	LKTRTrace("%.*s, ia_valid 0x%x\n", DLNPair(dentry), ia->ia_valid);
@@ -348,9 +377,6 @@ static int aufs_setattr(struct dentry *dentry, struct iattr *ia)
 	IMustLock(inode);
 
 	aufs_read_lock(dentry, AUFS_D_WLOCK);
-	isdir = S_ISDIR(inode->i_mode);
-	parent = dentry->d_parent; // dget_parent()
-	dir = parent->d_inode;
 	bstart = dbstart(dentry);
 	bcpup = err = wr_dir(dentry, /*add*/0, /*src_dentry*/NULL,
 			     /*force_btgt*/-1, /*do_lock_srcdir*/0);
@@ -358,30 +384,43 @@ static int aufs_setattr(struct dentry *dentry, struct iattr *ia)
 	if (unlikely(err < 0))
 		goto out;
 
-	// todo: remove this extra inode lock
-	h_dir = NULL;
+	/* crazy udba locks */
 	udba = IS_MS(dentry->d_sb, MS_UDBA_INOTIFY);
-	// todo: if (unlikely((udba || bstart != bcpup) && dentry != parent)) {
-	if (dentry != parent) {
-		di_read_lock(parent, AUFS_I_RLOCK);
+	parent = NULL;
+	gdir = gh_dir = dir = h_dir = NULL;
+	if ((udba || bstart != bcpup) && !IS_ROOT(dentry)) {
+		parent = dentry->d_parent; // dget_parent()
+		dir = parent->d_inode;
+		di_read_lock_parent(parent, AUFS_I_RLOCK);
 		h_dir = h_iptr_i(dir, bcpup);
-		hdir_lock(h_dir, dir, bcpup, ipriv + PARENT);
+	}
+	if (parent) {
+		if (unlikely(udba && !IS_ROOT(parent))) {
+			gdir = parent->d_parent->d_inode;  // dget_parent()
+			ii_read_lock_parent2(gdir);
+			gh_dir = h_iptr_i(gdir, bcpup);
+			hgdir_lock(gh_dir, gdir, bcpup);
+		}
+		hdir_lock(h_dir, dir, bcpup);
 	}
 
+	isdir = S_ISDIR(inode->i_mode);
 	hidden_dentry = h_dptr(dentry);
 	hidden_inode = hidden_dentry->d_inode;
 	DEBUG_ON(!hidden_inode);
 
-#define HiLock(bindex) \
+#define HiLock(bindex) do {\
 	if (!isdir) \
-		i_lock_priv(hidden_inode, ipriv + CHILD, dentry->d_sb); \
+		hi_lock_child(hidden_inode); \
 	else \
-		hdir_lock(hidden_inode, inode, bindex, ipriv + CHILD);
-#define HiUnlock(bindex) \
+		hdir2_lock(hidden_inode, inode, bindex); \
+	} while (0)
+#define HiUnlock(bindex) do {\
 	if (!isdir) \
-		i_unlock_priv(hidden_inode, ipriv + CHILD); \
+		i_unlock(hidden_inode); \
 	else \
-		hdir_unlock(hidden_inode, inode, bindex, ipriv + CHILD);
+		hdir_unlock(hidden_inode, inode, bindex); \
+	} while (0)
 
 	if (bstart != bcpup) {
 		loff_t size = -1;
@@ -391,14 +430,11 @@ static int aufs_setattr(struct dentry *dentry, struct iattr *ia)
 			size = ia->ia_size;
 			ia->ia_valid &= ~ATTR_SIZE;
 		}
-		err = 0;
-		if (!h_dptr_i(dentry, bcpup)) {
-			HiLock(bstart);
-			err = sio_cpup_simple(dentry, bcpup, size,
-					      flags_cpup(CPUP_DTIME, parent));
-			//err = -1;
-			HiUnlock(bstart);
-		}
+		HiLock(bstart);
+		err = sio_cpup_simple(dentry, bcpup, size,
+				      au_flags_cpup(CPUP_DTIME, parent));
+		//err = -1;
+		HiUnlock(bstart);
 		if (unlikely(err || !ia->ia_valid))
 			goto out_unlock;
 
@@ -408,18 +444,23 @@ static int aufs_setattr(struct dentry *dentry, struct iattr *ia)
 	}
 
 	HiLock(bcpup);
-	err = hidden_notify_change(hidden_dentry, ia, NULL);
+	err = hidden_notify_change(hidden_dentry, ia, NULL,
+				   need_dlgt(dentry->d_sb));
 	//err = -1;
 	if (!err)
-		cpup_attr_changable(inode);
+		au_cpup_attr_changable(inode);
 	HiUnlock(bcpup);
 #undef HiLock
 #undef HiUnlock
 
  out_unlock:
-	if (h_dir) {
-		hdir_unlock(h_dir, dir, bcpup, ipriv + PARENT);
+	if (parent) {
+		hdir_unlock(h_dir, dir, bcpup);
 		di_read_unlock(parent, AUFS_I_RLOCK);
+	}
+	if (unlikely(gdir)) {
+		hdir_unlock(gh_dir, gdir, bcpup);
+		ii_read_unlock(gdir);
 	}
  out:
 	aufs_read_unlock(dentry, AUFS_D_WLOCK);

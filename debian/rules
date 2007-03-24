@@ -3,6 +3,11 @@
 include /usr/share/cdbs/1/rules/simple-patchsys.mk
 include /usr/share/cdbs/1/rules/debhelper.mk
 
+# upstream major version
+UPVERSION := $(shell dpkg-parsechangelog | sed -n 's/^Version: \(.*\)~.*/\1/p')
+# upstream CVS version
+DATE := $(shell date +%Y%m%d)
+
 install/aufs-source::
 	# Enforce executable bit on debian/rules, and create directory 
 	# structure for modules source
@@ -24,5 +29,12 @@ install/aufs-source::
 	tar jcf debian/aufs-source/usr/src/aufs.tar.bz2 \
 		-C debian/tmp modules
 
-#get-orig-source:
-	# XXX: help me!
+get-orig-source:
+	@rm -rf ../aufs-$(DATE) ../aufs_$(UPVERSION)~$(DATE).orig.tar.gz
+	cd .. && cvs -z3 -d:pserver:anonymous@aufs.cvs.sourceforge.net:/cvsroot/aufs \
+		export -d aufs-$(DATE) -D $(DATE) aufs
+	@test -d ../aufs-$(DATE)
+	tar zcf ../aufs_$(UPVERSION)~$(DATE).orig.tar.gz -C .. aufs-$(DATE)
+	@rm -rf ../aufs-$(DATE)
+	@echo "Don't forget to update your upstream with " \
+		"../aufs_$(UPVERSION)~$(DATE).orig.tar.gz"

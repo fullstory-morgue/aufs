@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: opts.h,v 1.8 2007/01/22 04:00:23 sfjro Exp $ */
+/* $Id: opts.h,v 1.9 2007/02/26 02:28:28 sfjro Exp $ */
 
 #ifndef __AUFS_OPTS_H__
 #define __AUFS_OPTS_H__
@@ -75,7 +75,7 @@ struct opts {
 
 int br_perm_str(char *p, int len, unsigned int perm);
 char *udba_str(int udba);
-char *coo_str(int coo);
+//char *coo_str(int coo);
 void free_opts(struct opts *opts);
 int parse_opts(struct super_block *sb, char *str, struct opts *opts,
 	       int remount);

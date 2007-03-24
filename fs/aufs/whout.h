@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: whout.h,v 1.3 2007/02/12 02:57:13 sfjro Exp $ */
+/* $Id: whout.h,v 1.5 2007/03/19 04:32:35 sfjro Exp $ */
 
 #ifndef __AUFS_WHOUT_H__
 #define __AUFS_WHOUT_H__
@@ -26,32 +26,34 @@
 
 #ifdef __KERNEL__
 
-int alloc_whname(const char *name, int len, struct qstr *wh);
-void free_whname(struct qstr *wh);
+int au_alloc_whname(const char *name, int len, struct qstr *wh);
+void au_free_whname(struct qstr *wh);
 
+struct lkup_args;
 int is_wh(struct dentry *h_parent, struct qstr *wh_name, int try_sio,
-	  struct vfsmount *h_mnt);
-int is_diropq(struct dentry *h_dentry, struct vfsmount *h_mnt);
+	  struct lkup_args *lkup);
+int is_diropq(struct dentry *h_dentry, struct lkup_args *lkup);
 
 struct dentry *lkup_whtmp(struct dentry *h_parent, struct qstr *prefix,
-			    struct vfsmount *h_mnt);
+			  struct lkup_args *lkup);
 int rename_whtmp(struct dentry *dentry, aufs_bindex_t bindex);
-int unlink_wh_dentry(struct inode *h_dir, struct dentry *wh_dentry,
-		     struct dentry *dentry);
+int au_unlink_wh_dentry(struct inode *h_dir, struct dentry *wh_dentry,
+			struct dentry *dentry, int do_dlgt);
 
 struct aufs_branch;
-int init_wh(struct dentry *_parent, struct aufs_branch *br,
-	    struct vfsmount *h_mnt);
+int init_wh(struct dentry *h_parent, struct aufs_branch *br,
+	    struct vfsmount *nfsmnt);
 
 struct dentry *sio_diropq(struct dentry *dentry, aufs_bindex_t bindex,
-			  int do_create);
-#define create_diropq(dentry, bindex)	sio_diropq(dentry, bindex, 1)
-#define remove_diropq(dentry, bindex)	PTR_ERR(sio_diropq(dentry, bindex, 0))
+			  int do_create, int do_dlgt);
+#define create_diropq(d, i, dlgt)	sio_diropq(d, i, 1, dlgt)
+#define remove_diropq(d, i, dlgt)	PTR_ERR(sio_diropq(d, i, 0, dlgt))
 
 struct dentry *lkup_wh(struct dentry *h_parent, struct qstr *base_name,
-			 struct vfsmount *h_mnt);
+		       struct lkup_args *lkup);
 struct dentry *simple_create_wh(struct dentry *dentry, aufs_bindex_t bindex,
-				struct dentry *h_parent);
+				struct dentry *h_parent,
+				struct lkup_args *lkup);
 
 struct rmdir_whtmp_arg {
 	struct dentry *h_dentry;

@@ -18,7 +18,7 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
-# $Id: linuxrc,v 1.2 2007/01/08 01:58:50 sfjro Exp $
+# $Id: linuxrc,v 1.3 2007/03/12 01:54:56 sfjro Exp $
 
 set -e
 #echo here i am
@@ -42,20 +42,27 @@ do
 	test -f tmp/$i
 done
 insmod tmp/aufs.ko
-sh tmp/comount.sh
+
+eval `tr ' ' '\n' < /proc/cmdline | grep '^dl_label='`
+sh tmp/comount.sh $dl_label
 #/bin/sh -i
 rm tmp/comount.sh
 
 d=/aufs/etc
 f=$d/resolv.conf
 mkdir -p $d
-test -e $f || { echo domain $DOMAIN; echo nameserver $DNSSRVS; } > $f
+test -h $f || { echo domain $DOMAIN; echo nameserver $DNSSRVS; } > $f
 
 #cat /proc/mounts; /bin/sh -i
 echo 0x0100 > /proc/sys/kernel/real-root-dev
 umount /proc
 
 cd aufs
+mkdir -p initrd
 pivot_root . initrd
+/initrd/bin/busybox mount -nt proc proc /proc
+/initrd/bin/busybox egrep -v ' (root|cram)fs ' /proc/mounts > etc/mtab
+/initrd/bin/busybox umount /proc
+/initrd/bin/busybox mount -o remount,ro .
 #exec /sbin/init < /dev/console > /dev/console 2>&1 /dev/console
 trap "" 0

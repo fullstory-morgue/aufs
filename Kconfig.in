@@ -1,5 +1,5 @@
 
-/* $Id: Kconfig.in,v 1.1 2007/02/19 03:31:29 sfjro Exp $ */
+/* $Id: Kconfig.in,v 1.5 2007/03/19 04:34:07 sfjro Exp $ */
 
 #include <linux/version.h>
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,18)
@@ -9,8 +9,14 @@
 config AUFS
 	tristate "Another unionfs"
 	help
-	Aufs is a stackable unification filesystem such as Unionfs, which
-	unifies several directories and provides a merged single directory.
+	Aufs is a stackable unification filesystem such as Unionfs,
+	which unifies several directories and provides a merged single
+	directory.
+	In the early days, aufs was entirely re-designed and
+	re-implemented Unionfs Version 1.x series. After many original
+	ideas, approaches and improvements, it becomes totally
+	different from Unionfs while keeping the basic features.
+	See Unionfs for the basic features.
 
 if AUFS
 comment "These options are generated automatically for "#UTS_RELEASE
@@ -22,18 +28,49 @@ config AUFS_FAKE_DM
 	Faking nameidata (VFS internal data), you can get better performance
 	in some cases.
 
+#define HELP \
+	Specifies the maximum number of branches (or member directories) in a \
+	single aufs. The larger value consumes more system resources and has \
+	an impact to performance.
 choice
 	prompt "Maximum number of branches"
-	default AUFS_BRANCH_MAX_CHAR
+	default AUFS_BRANCH_MAX_127
 	help
-	Specifies the maximum number of branches (or member directories) in a
-	single aufs. The larger value consumes more system resources.
-
-config AUFS_BRANCH_MAX_CHAR
-	bool "127 (signed char)"
-config AUFS_BRANCH_MAX_SHORT
-	bool "32767 (signed short)"
+	HELP
+config AUFS_BRANCH_MAX_127
+	bool "127"
+	help
+	HELP
+config AUFS_BRANCH_MAX_511
+	bool "511"
+	help
+	HELP
+config AUFS_BRANCH_MAX_1023
+	bool "1023"
+	help
+	HELP
+/* 128kb is available for kmalloc? */
+config AUFS_BRANCH_MAX_32767
+	bool "32767"
+	help
+	HELP
 endchoice
+
+#if 0 //LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,18)
+config AUFS_SYSAUFS
+	bool "Use <sysfs>/fs/aufs"
+	depends on SYSFS
+	default y
+	help
+	Aufs creates some files under sysfs for various purposes.
+	If the number of your branches is large or their path is long
+	and you meet the limitation of mount(8), /etc/mtab or
+	/proc/mount, you need to enable this option and set aufs
+	module parameter brs=1.
+	See detail in aufs.5.
+comment "SYSAUFS and AUFS_SYSAUFS are disabled"
+	depends on SYSFS = n
+#endif
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,18)
 config AUFS_HINOTIFY
@@ -44,10 +81,40 @@ config AUFS_HINOTIFY
 	If you want to modify files on branches directly, eg. bypassing aufs,
 	and want aufs to detect the changes of them fully, then enable this
 	option and use 'udba=inotify' mount option.
+	It may damage the performance.
 	See detail in aufs.5.
+	Caution: if you enable AUFS_DEBUG_RWSEM, you cannot use 'udba=inotify.'
 
 comment "INOTIFY and AUFS_HINOTIFY are disabled"
 	depends on INOTIFY = n
+#endif
+
+#if 0 //LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,18)
+config AUFS_EXPORT
+	bool "NFS-exportable aufs"
+	depends on EXPORTFS
+	default n
+	help
+	If you want to export your mounted aufs, then enable this
+	option. There are serveral requirements to export aufs.
+	See detail in aufs.5.
+
+comment "EXPORTFS and AUFS_EXPORT are disabled"
+	depends on EXPORTFS = n
+#endif
+
+#if 0
+config AUFS_DLGT
+	bool "Delegate the access to the branches from aufs to the kernel thread"
+	default n
+	help
+	If you want aufs to delegate the internal access to the
+	branches to the kernel thread, in order to hide the access
+	issued by your application from your LSM or something or make your
+	application to be traced strictly by the task I/O accounting,
+	then enable this option and use 'dlgt' mount option.
+	It may damage the performance.
+	See detail in aufs.5.
 #endif
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,16)
@@ -79,26 +146,6 @@ comment "NFS_FS and AUFS_LHASH_PATCH are disabled"
 	depends on NFS_FS = n
 #endif
 
-#if 0
-config AUFS_IPRIV_PATCH
-	bool "ipriv.patch for LSM was applied or not"
-	depends on SECURITY
-	default n
-	help
-	If you use LSM and want LSM to ignore the access from aufs to branches,
-	then you need to apply the patch 'CVS_TREE/aufs/ipriv.patch' to your
-	kernel source, enable this configuration, and use 'ipriv' mount
-	option.
-	The ipriv.patch introduces a new flag to i_state, and makes LSM to
-	check it.
-	LSM has a similar flag already in i_flags called S_PRIVATE. The
-	differece between two flags is only one. The new flag never be stored
-	in disk.
-
-comment "SECURITY and AUFS_IPRIV_PATCH are disabled"
-	depends on SECURITY = n
-#endif
-
 config AUFS_DEBUG
 	bool "Debug aufs"
 	default y
@@ -111,6 +158,7 @@ config AUFS_DEBUG_RWSEM
 	help
 	Enable this to compile aufs internal debugging specific to rwsem. Much
 	slower.
+	Caution: if you enable AUFS_DEBUG_RWSEM, you cannot use 'udba=inotify.'
 
 config AUFS_COMPAT
 	bool "Compatibility with Unionfs (obsolete)"
@@ -122,7 +170,7 @@ config AUFS_COMPAT
 	interpreted as br: mount option and =ro flag respectively. The
 	'debug', 'delete' and 'imap' mount options are ignored.
 	If you disable this option, you will get,
-	- aufs issues a wanring about the ignored mount options
+	- aufs issues a warning about the ignored mount options
 	- the default branch permission flag is set. RW for the first branch,
 	  and RO for the rests.
 	- the name of a internal file which represents the directory is

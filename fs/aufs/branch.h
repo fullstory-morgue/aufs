@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: branch.h,v 1.22 2007/02/19 03:26:18 sfjro Exp $ */
+/* $Id: branch.h,v 1.25 2007/03/19 04:30:30 sfjro Exp $ */
 
 #ifndef __AUFS_BRANCH_H__
 #define __AUFS_BRANCH_H__
@@ -54,9 +54,21 @@ struct aufs_branch {
 #define br_get(br)		atomic_inc(&(br)->br_count)
 #define br_put(br)		atomic_dec(&(br)->br_count)
 
-#define br_wh_read_lock(br)	rw_read_lock(&(br)->br_wh_rwsem)
+/* Superblock to branch */
+#define sbr_id(sb, bindex)	({stobr(sb, bindex)->br_id;})
+#define sbr_mnt(sb, bindex)	({stobr(sb, bindex)->br_mnt;})
+#define sbr_sb(sb, bindex)	({sbr_mnt(sb, bindex)->mnt_sb;})
+#define sbr_count(sb, bindex)	br_count(stobr(sb, bindex))
+#define sbr_get(sb, bindex)	br_get(stobr(sb, bindex))
+#define sbr_put(sb, bindex)	br_put(stobr(sb, bindex))
+#define sbr_perm(sb, bindex) 	({stobr(sb, bindex)->br_perm;})
+#define sbr_perm_str(sb, bindex, str, len) \
+	br_perm_str(str, len, stobr(sb, bindex)->br_perm)
+
+#define br_wh_read_lock(br)	rw_read_lock(&(br)->br_wh_rwsem, AUFS_LSC_BR_WH)
 #define br_wh_read_unlock(br)	rw_read_unlock(&(br)->br_wh_rwsem)
-#define br_wh_write_lock(br)	rw_write_lock(&(br)->br_wh_rwsem)
+#define br_wh_write_lock(br) \
+	rw_write_lock(&(br)->br_wh_rwsem, AUFS_LSC_BR_WH)
 #define br_wh_write_unlock(br)	rw_write_unlock(&(br)->br_wh_rwsem)
 
 /* debug macro. use with caution */
@@ -103,7 +115,7 @@ struct aufs_branch {
 struct aufs_sbinfo;
 void free_branches(struct aufs_sbinfo *sinfo);
 int br_rdonly(struct aufs_branch *br);
-int find_brindex(struct super_block *sb, unsigned int id);
+int find_brindex(struct super_block *sb, aufs_bindex_t br_id);
 int find_rw_br(struct super_block *sb, aufs_bindex_t bend);
 int find_rw_parent_br(struct dentry *dentry, aufs_bindex_t bend);
 struct opt_add;

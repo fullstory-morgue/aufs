@@ -16,55 +16,17 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: misc.c,v 1.23 2007/02/19 03:28:50 sfjro Exp $ */
+/* $Id: misc.c,v 1.27 2007/03/19 04:33:05 sfjro Exp $ */
 
 //#include <linux/fs.h>
 //#include <linux/namei.h>
 //#include <linux/mm.h>
-#include <asm/uaccess.h>
+//#include <asm/uaccess.h>
 #include "aufs.h"
 
-/*
- * @hidden_dir: must be locked.
- * @hidden_dentry: target dentry.
- */
-int safe_unlink(struct inode *hidden_dir, struct dentry *hidden_dentry)
-{
-	int err;
-	struct inode *hidden_inode;
-	const int stop_sillyrename
-		= (SB_NFS(hidden_dentry->d_sb)
-		   && atomic_read(&hidden_dentry->d_count) == 1);
-
-	LKTRTrace("%.*s\n", DLNPair(hidden_dentry));
-	IMustLock(hidden_dir);
-
-	if (!stop_sillyrename)
-		dget(hidden_dentry);
-	hidden_inode = hidden_dentry->d_inode;
-	if (hidden_inode)
-		atomic_inc(&hidden_inode->i_count);
-#if 0 // partial testing
-	{struct qstr *name = &hidden_dentry->d_name;
-	if (name->len == sizeof(AUFS_XINO_FNAME)-1
-	    && !strncmp(name->name, AUFS_XINO_FNAME, name->len))
-		err = vfs_unlink(hidden_dir, hidden_dentry);
-	else err = -1;}
-#else
-	// vfs_unlink() locks inode
-	err = vfs_unlink(hidden_dir, hidden_dentry);
-#endif
-	if (!stop_sillyrename)
-		dput(hidden_dentry);
-	if (hidden_inode)
-		iput(hidden_inode);
-
-	TraceErr(err);
-	return err;
-}
-
+// todo: remove this
 int hidden_notify_change(struct dentry *hidden_dentry, struct iattr *ia,
-			 struct dentry *dentry)
+			 struct dentry *dentry, int dlgt)
 {
 	int err;
 	struct inode *hidden_inode;
@@ -76,7 +38,7 @@ int hidden_notify_change(struct dentry *hidden_dentry, struct iattr *ia,
 
 	err = -EPERM;
 	if (!IS_IMMUTABLE(hidden_inode) && !IS_APPEND(hidden_inode)) {
-		err = notify_change(hidden_dentry, ia);
+		err = vfsub_notify_change(hidden_dentry, ia, dlgt);
 		//err = -1;
 #if 0 // todo: remove this
 		if (unlikely(!err && dentry
@@ -124,7 +86,6 @@ void *kzrealloc(void *p, int nused, int new_sz)
 
 /* ---------------------------------------------------------------------- */
 
-// todo: if MS_PRIVATE is set, no need to set them.
 // todo: make it inline
 struct nameidata *fake_dm(struct nameidata *fake_nd, struct nameidata *nd,
 			  struct super_block *sb, aufs_bindex_t bindex)
@@ -167,9 +128,10 @@ void fake_dm_release(struct nameidata *fake_nd)
 
 /* ---------------------------------------------------------------------- */
 
-int copy_file(struct file *dst, struct file *src, loff_t len)
+int au_copy_file(struct file *dst, struct file *src, loff_t len,
+		 struct super_block *sb, int *sparse)
 {
-	int err;
+	int err, all_zero, dlgt;
 	unsigned long blksize;
 	char *buf;
 
@@ -188,14 +150,14 @@ int copy_file(struct file *dst, struct file *src, loff_t len)
 	if (unlikely(!buf))
 		goto out;
 
-	err = 0;
+	dlgt = need_dlgt(sb);
+	err = all_zero = 0;
 	dst->f_pos = src->f_pos = 0;
 	//smp_mb();
 	while (len) {
 		size_t sz, rbytes, wbytes;
 		char *p;
-		int all_zero, i;
-		mm_segment_t oldfs;
+		int i;
 
 		LKTRTrace("len %lld\n", len);
 		sz = blksize;
@@ -204,19 +166,14 @@ int copy_file(struct file *dst, struct file *src, loff_t len)
 
 		/* support LSM and notify */
 		rbytes = 0;
-		while (!rbytes || err == -EAGAIN || err == -EINTR) {
-			oldfs = get_fs();
-			set_fs(KERNEL_DS);
-			err = rbytes = vfs_read(src, (char __user*)buf, sz,
-						&src->f_pos);
-			set_fs(oldfs);
-		}
+		while (!rbytes || err == -EAGAIN || err == -EINTR)
+			err = rbytes = vfsub_read_k(src, buf, sz, &src->f_pos,
+						    dlgt);
 		if (unlikely(err < 0))
 			break;
 
-		/* force write the last block even if it is a hole */
 		all_zero = 0;
-		if (len > rbytes && rbytes == blksize) {
+		if (len >= rbytes && rbytes == blksize) {
 			all_zero = 1;
 			p = buf;
 			for (i = 0; all_zero && i < rbytes; i++)
@@ -228,11 +185,8 @@ int copy_file(struct file *dst, struct file *src, loff_t len)
 			while (wbytes) {
 				size_t b;
 				/* support LSM and notify */
-				oldfs = get_fs();
-				set_fs(KERNEL_DS);
-				err = b = vfs_write(dst, (const char __user*)p,
-						    wbytes, &dst->f_pos);
-				set_fs(oldfs);
+				err = b = vfsub_write_k(dst, p, wbytes,
+							&dst->f_pos, dlgt);
 				if (unlikely(err == -EAGAIN || err == -EINTR))
 					continue;
 				if (unlikely(err < 0))
@@ -243,12 +197,34 @@ int copy_file(struct file *dst, struct file *src, loff_t len)
 		} else {
 			loff_t res;
 			LKTRLabel(hole);
-			err = res = vfs_llseek(dst, rbytes, SEEK_CUR);
+			*sparse = 1;
+			err = res = vfsub_llseek(dst, rbytes, SEEK_CUR);
 			if (unlikely(res < 0))
 				break;
 		}
 		len -= rbytes;
 		err = 0;
+	}
+
+	/* the last block may be a hole */
+	if (unlikely(!err && all_zero)) {
+		struct iattr ia = {
+			.ia_size	= dst->f_pos,
+			.ia_valid	= ATTR_SIZE | ATTR_FILE,
+			.ia_file	= dst
+		};
+		struct dentry *h_d = dst->f_dentry;
+		struct inode *h_i = h_d->d_inode;
+
+		LKTRLabel(last hole);
+		do {
+			err = vfsub_write_k(dst, "\0", 1, &dst->f_pos, dlgt);
+		} while (err == -EAGAIN || err == -EINTR);
+		if (err == 1) {
+			hi_lock_child2(h_i);
+			err = vfsub_notify_change(h_d, &ia, dlgt);
+			i_unlock(h_i);
+		}
 	}
 
 	kfree(buf);
@@ -272,7 +248,7 @@ int test_ro(struct super_block *sb, aufs_bindex_t bindex, struct inode *inode)
 	return err;
 }
 
-int test_perm(struct inode *hidden_inode, int mask)
+int au_test_perm(struct inode *hidden_inode, int mask, int dlgt)
 {
 	if (!current->fsuid)
 		return 0;
@@ -280,5 +256,5 @@ int test_perm(struct inode *hidden_inode, int mask)
 		     && (mask & MAY_WRITE)
 		     && S_ISDIR(hidden_inode->i_mode)))
 		mask |= MAY_READ; /* force permission check */
-	return permission(hidden_inode, mask, NULL);
+	return vfsub_permission(hidden_inode, mask, NULL, dlgt);
 }

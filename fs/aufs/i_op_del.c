@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: i_op_del.c,v 1.24 2007/02/19 03:28:15 sfjro Exp $ */
+/* $Id: i_op_del.c,v 1.27 2007/03/19 04:32:35 sfjro Exp $ */
 
 #include "aufs.h"
 
@@ -97,13 +97,13 @@ int wr_dir_need_wh(struct dentry *dentry, int isdir, aufs_bindex_t *bcpup,
 
 static struct dentry *lock_hdir_create_wh(struct dentry *dentry, int isdir,
 					  aufs_bindex_t *bcpup,
-					  struct dtime *dt,
-					  struct aufs_h_ipriv *ipriv)
+					  struct dtime *dt)
 {
 	struct dentry *wh_dentry;
 	int err, need_wh;
 	struct dentry *hidden_parent, *parent;
 	struct inode *dir, *h_dir;
+	struct lkup_args lkup;
 
 	LKTRTrace("%.*s, isdir %d\n", DLNPair(dentry), isdir);
 
@@ -117,18 +117,20 @@ static struct dentry *lock_hdir_create_wh(struct dentry *dentry, int isdir,
 	dir = parent->d_inode;
 	hidden_parent = h_dptr_i(parent, *bcpup);
 	h_dir = hidden_parent->d_inode;
-	hdir_lock(h_dir, dir, *bcpup, ipriv);
+	hdir_lock(h_dir, dir, *bcpup);
 	dtime_store(dt, parent, hidden_parent);
 	if (!need_wh)
 		return NULL; /* success, no need to create whiteout */
 
-	wh_dentry = simple_create_wh(dentry, *bcpup, hidden_parent);
+	lkup.nfsmnt = mnt_nfs(dentry->d_sb, *bcpup);
+	lkup.dlgt = need_dlgt(dentry->d_sb);
+	wh_dentry = simple_create_wh(dentry, *bcpup, hidden_parent, &lkup);
 	//wh_dentry = ERR_PTR(-1);
 	if (!IS_ERR(wh_dentry))
 		goto out; /* success */
 	/* returns with the parent is locked and wh_dentry is DGETed */
 
-	hdir_unlock(h_dir, dir, *bcpup, ipriv);
+	hdir_unlock(h_dir, dir, *bcpup);
 
  out:
 	TraceErrPtr(wh_dentry);
@@ -178,20 +180,20 @@ static void epilog(struct inode *dir, struct dentry *dentry,
 	dentry->d_inode->i_ctime = dir->i_ctime;
 	if (atomic_read(&dentry->d_count) == 1) {
 		set_h_dptr(dentry, dbstart(dentry), NULL);
-		update_dbstart(dentry);
+		au_update_dbstart(dentry);
 	}
 	if (ibstart(dir) == bindex)
-		cpup_attr_timesizes(dir);
+		au_cpup_attr_timesizes(dir);
 	dir->i_version++;
 }
 
 static int do_revert(int err, struct dentry *wh_dentry, struct dentry *dentry,
-		     aufs_bindex_t bwh, struct dtime *dt)
+		     aufs_bindex_t bwh, struct dtime *dt, int dlgt)
 {
 	int rerr;
 
-	rerr = unlink_wh_dentry(wh_dentry->d_parent->d_inode, wh_dentry,
-				dentry);
+	rerr = au_unlink_wh_dentry(wh_dentry->d_parent->d_inode, wh_dentry,
+				   dentry, dlgt);
 	//rerr = -1;
 	if (!rerr) {
 		set_dbwh(dentry, bwh);
@@ -208,12 +210,11 @@ static int do_revert(int err, struct dentry *wh_dentry, struct dentry *dentry,
 
 int aufs_unlink(struct inode *dir, struct dentry *dentry)
 {
-	int err;
+	int err, dlgt;
 	struct inode *inode, *hidden_dir;
 	struct dentry *parent, *wh_dentry, *hidden_dentry, *hidden_parent;
 	struct dtime dt;
 	aufs_bindex_t bwh, bindex, bstart;
-	struct aufs_h_ipriv ipriv;
 
 	LKTRTrace("i%lu, %.*s\n", dir->i_ino, DLNPair(dentry));
 	IMustLock(dir);
@@ -224,25 +225,25 @@ int aufs_unlink(struct inode *dir, struct dentry *dentry)
 
 	aufs_read_lock(dentry, AUFS_D_WLOCK);
 	parent = dentry->d_parent;
-	di_write_lock(parent);
+	di_write_lock_parent(parent);
 
 	bstart = dbstart(dentry);
 	bwh = dbwh(dentry);
 	bindex = -1;
-	wh_dentry = lock_hdir_create_wh(dentry, /*isdir*/0, &bindex, &dt,
-					&ipriv);
+	wh_dentry = lock_hdir_create_wh(dentry, /*isdir*/0, &bindex, &dt);
 	//wh_dentry = ERR_PTR(-1);
 	err = PTR_ERR(wh_dentry);
 	if (IS_ERR(wh_dentry))
 		goto out;
 
+	dlgt = need_dlgt(dir->i_sb);
 	hidden_dentry = h_dptr(dentry);
 	dget(hidden_dentry);
 	hidden_parent = hidden_dentry->d_parent;
 	hidden_dir = hidden_parent->d_inode;
 
 	if (bindex == bstart) {
-		err = hipriv_unlink(hidden_dir, hidden_dentry, dentry->d_sb);
+		err = vfsub_unlink(hidden_dir, hidden_dentry, dlgt);
 		//err = -1;
 	} else {
 		DEBUG_ON(!wh_dentry);
@@ -262,13 +263,13 @@ int aufs_unlink(struct inode *dir, struct dentry *dentry)
 	/* revert */
 	if (wh_dentry) {
 		int rerr;
-		rerr = do_revert(err, wh_dentry, dentry, bwh, &dt);
+		rerr = do_revert(err, wh_dentry, dentry, bwh, &dt, dlgt);
 		if (rerr)
 			err = rerr;
 	}
 
  out_unlock:
-	hdir_unlock(hidden_dir, dir, bindex, &ipriv);
+	hdir_unlock(hidden_dir, dir, bindex);
 	if (wh_dentry)
 		dput(wh_dentry);
 	dput(hidden_dentry);
@@ -288,7 +289,6 @@ int aufs_rmdir(struct inode *dir, struct dentry *dentry)
 	aufs_bindex_t bwh, bindex, bstart;
 	struct rmdir_whtmp_arg *arg;
 	struct aufs_nhash whlist;
-	struct aufs_h_ipriv ipriv;
 
 	LKTRTrace("i%lu, %.*s\n", dir->i_ino, DLNPair(dentry));
 	IMustLock(dir);
@@ -299,7 +299,7 @@ int aufs_rmdir(struct inode *dir, struct dentry *dentry)
 
 	aufs_read_lock(dentry, AUFS_D_WLOCK);
 	parent = dentry->d_parent;
-	di_write_lock(parent);
+	di_write_lock_parent(parent);
 
 	err = -ENOMEM;
 	rmdir_later = 0;
@@ -317,8 +317,7 @@ int aufs_rmdir(struct inode *dir, struct dentry *dentry)
 	bstart = dbstart(dentry);
 	bwh = dbwh(dentry);
 	bindex = -1;
-	wh_dentry = lock_hdir_create_wh(dentry, /*isdir*/ 1, &bindex, &dt,
-					&ipriv);
+	wh_dentry = lock_hdir_create_wh(dentry, /*isdir*/ 1, &bindex, &dt);
 	//wh_dentry = ERR_PTR(-1);
 	err = PTR_ERR(wh_dentry);
 	if (IS_ERR(wh_dentry))
@@ -364,13 +363,14 @@ int aufs_rmdir(struct inode *dir, struct dentry *dentry)
 	LKTRLabel(revert);
 	if (wh_dentry) {
 		int rerr;
-		rerr = do_revert(err, wh_dentry, dentry, bwh, &dt);
+		rerr = do_revert(err, wh_dentry, dentry, bwh, &dt,
+				 need_dlgt(dir->i_sb));
 		if (rerr)
 			err = rerr;
 	}
 
  out_unlock:
-	hdir_unlock(hidden_dir, dir, bindex, &ipriv);
+	hdir_unlock(hidden_dir, dir, bindex);
 	if (wh_dentry)
 		dput(wh_dentry);
 	dput(hidden_dentry);

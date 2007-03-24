@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: xino.c,v 1.17 2007/02/19 03:30:12 sfjro Exp $ */
+/* $Id: xino.c,v 1.21 2007/03/19 04:31:31 sfjro Exp $ */
 
 //#include <linux/fs.h>
 #include <linux/fsnotify.h>
@@ -57,7 +57,6 @@ static ssize_t fread(readf_t func, struct file *file, void *buf, size_t size,
 
 	LKTRTrace("%.*s, sz %d, *pos %Ld\n",
 		  DLNPair(file->f_dentry), size, *pos);
-	//IMustPriv(file->f_dentry->d_inode);
 
 	oldfs = get_fs();
 	set_fs(KERNEL_DS);
@@ -82,13 +81,14 @@ static ssize_t do_fwrite(writef_t func, struct file *file, void *buf,
 	ssize_t err;
 	mm_segment_t oldfs;
 
-	//smp_mb();
+	lockdep_off();
 	oldfs = get_fs();
 	set_fs(KERNEL_DS);
 	do {
 		err = func(file, (const char __user*)buf, size, pos);
 	} while (err == -EAGAIN || err == -EINTR);
 	set_fs(oldfs);
+	lockdep_on();
 
 #if 0
 	if (err > 0)
@@ -136,7 +136,7 @@ static ssize_t fwrite(writef_t func, struct file *file, void *buf, size_t size,
 			.size	= size,
 			.pos	= pos,
 		};
-		wkq_wait(call_do_fwrite, &args);
+		wkq_wait(call_do_fwrite, &args, /*dlgt*/0);
 	} else
 		err = do_fwrite(func, file, buf, size, pos);
 
@@ -154,31 +154,30 @@ struct file *xino_create(struct super_block *sb, char *fname, int silent,
 	struct dentry *hidden_parent;
 	struct inode *hidden_dir;
 	const int udba = IS_MS(sb, MS_UDBA_INOTIFY);
-	struct aufs_h_ipriv ipriv;
 
 	LKTRTrace("%s\n", fname);
 
-	// todo: ignore LSM
-	file = filp_open(fname, O_RDWR | O_CREAT | O_EXCL | O_LARGEFILE,
-			 S_IRUGO | S_IWUGO);
+	// LSM may detect it
+	// use sio?
+	file = vfsub_filp_open(fname, O_RDWR | O_CREAT | O_EXCL | O_LARGEFILE,
+			       S_IRUGO | S_IWUGO);
 	//file = ERR_PTR(-1);
 	if (IS_ERR(file)) {
 		if (!silent)
 			Err("open %s(%ld)\n", fname, PTR_ERR(file));
 		return file;
 	}
-	i_priv(file->f_dentry->d_inode);
 	if (unlikely(udba && parent))
 		direval_dec(parent);
 
 	/* keep file count */
 	hidden_parent = dget_parent(file->f_dentry);
 	hidden_dir = hidden_parent->d_inode;
-	i_lock_priv(hidden_dir, &ipriv, sb);
-	err = safe_unlink(hidden_dir, file->f_dentry);
+	hi_lock_parent(hidden_dir);
+	err = vfsub_unlink(hidden_dir, file->f_dentry, /*dlgt*/0);
 	if (unlikely(udba && parent))
 		direval_dec(parent);
-	i_unlock_priv(hidden_dir, &ipriv);
+	i_unlock(hidden_dir);
 	dput(hidden_parent);
 	if (unlikely(err)) {
 		if (!silent)
@@ -320,6 +319,10 @@ static struct file *xino_create2(struct file *base_file)
 	struct dentry *base, *dentry, *parent;
 	struct inode *dir;
 	struct qstr *name;
+	struct lkup_args lkup = {
+		.nfsmnt	= NULL,
+		.dlgt	= 0
+	};
 
 	base = base_file->f_dentry;
 	LKTRTrace("%.*s\n", DLNPair(base));
@@ -335,21 +338,20 @@ static struct file *xino_create2(struct file *base_file)
 
 	// do not superio, nor NFS.
 	name = &base->d_name;
-	dentry = lkup_one(name->name, parent, name->len, /*mnt*/NULL);
+	dentry = lkup_one(name->name, parent, name->len, &lkup);
 	//if (LktrCond) {dput(dentry); dentry = ERR_PTR(-1);}
 	if (IS_ERR(dentry)) {
 		file = (void*)dentry;
 		Err("%.*s lookup err %ld\n", LNPair(name), PTR_ERR(dentry));
 		goto out;
 	}
-	err = vfs_create(dir, dentry, S_IRUGO | S_IWUGO, NULL);
+	err = vfsub_create(dir, dentry, S_IRUGO | S_IWUGO, NULL, /*dlgt*/0);
 	//if (LktrCond) {vfs_unlink(dir, dentry); err = -1;}
 	if (unlikely(err)) {
 		file = ERR_PTR(err);
 		Err("%.*s create err %d\n", LNPair(name), err);
 		goto out_dput;
 	}
-	i_priv(dentry->d_inode);
 	file = dentry_open(dget(dentry), mntget(base_file->f_vfsmnt),
 			   O_RDWR | O_CREAT | O_EXCL | O_LARGEFILE);
 	//if (LktrCond) {fput(file); file = ERR_PTR(-1);}
@@ -357,7 +359,7 @@ static struct file *xino_create2(struct file *base_file)
 		Err("%.*s open err %ld\n", LNPair(name), PTR_ERR(file));
 		goto out_dput;
 	}
-	err = safe_unlink(dir, dentry);
+	err = vfsub_unlink(dir, dentry, /*dlgt*/0);
 	//if (LktrCond) err = -1;
 	if (!err)
 		goto out_dput; /* success */
@@ -411,12 +413,11 @@ int xino_init(struct super_block *sb, aufs_bindex_t bindex,
 	if (!file) {
 		struct dentry *parent = dget_parent(base_file->f_dentry);
 		struct inode *dir = parent->d_inode;
-		struct aufs_h_ipriv ipriv;
 
-		i_lock_priv(dir, &ipriv, sb);
+		hi_lock_parent(dir);
 		file = xino_create2(base_file);
 		//if (LktrCond) {fput(file); file = ERR_PTR(-1);}
-		i_unlock_priv(dir, &ipriv);
+		i_unlock(dir);
 		dput(parent);
 		err = PTR_ERR(file);
 		if (IS_ERR(file))
@@ -452,7 +453,7 @@ int xino_init(struct super_block *sb, aufs_bindex_t bindex,
  */
 int xino_set(struct super_block *sb, struct opt_xino *xino, int remount)
 {
-	int err;
+	int err, sparse;
 	aufs_bindex_t bindex, bend;
 	struct aufs_branch *br;
 	struct dentry *parent;
@@ -487,25 +488,25 @@ int xino_set(struct super_block *sb, struct opt_xino *xino, int remount)
 	for (bindex = 0; bindex <= bend; bindex++) {
 		struct file *file;
 		struct inode *inode;
-		struct aufs_h_ipriv ipriv;
 
 		br = stobr(sb, bindex);
 		if (!br->br_xino)
 			continue;
 
 		DEBUG_ON(file_count(br->br_xino) != 1);
-		i_lock_priv(dir, &ipriv, sb);
+		hi_lock_parent(dir);
 		file = xino_create2(xino->file);
 		//if (LktrCond) {fput(file); file = ERR_PTR(-1);}
 		err = PTR_ERR(file);
 		if (IS_ERR(file)) {
-			i_unlock_priv(dir, &ipriv);
+			i_unlock(dir);
 			break;
 		}
 		inode = br->br_xino->f_dentry->d_inode;
-		err = copy_file(file, br->br_xino, i_size_read(inode));
+		err = au_copy_file(file, br->br_xino, i_size_read(inode), sb,
+				   &sparse);
 		//if (LktrCond) err = -1;
-		i_unlock_priv(dir, &ipriv);
+		i_unlock(dir);
 		if (unlikely(err)) {
 			fput(file);
 			break;
@@ -562,7 +563,7 @@ int xino_clr(struct super_block *sb)
 }
 
 /*
- * create a xinofile at the place/path where is default.
+ * create a xinofile at the default place/path.
  */
 struct file *xino_def(struct super_block *sb)
 {

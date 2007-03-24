@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: dir.c,v 1.27 2007/02/19 03:26:51 sfjro Exp $ */
+/* $Id: dir.c,v 1.30 2007/03/19 04:31:58 sfjro Exp $ */
 
 #include "aufs.h"
 
@@ -108,7 +108,7 @@ static int do_open_dir(struct file *file, int flags)
 
 static int aufs_open_dir(struct inode *inode, struct file *file)
 {
-	return do_open(inode, file, do_open_dir);
+	return au_do_open(inode, file, do_open_dir);
 }
 
 static int aufs_release_dir(struct inode *inode, struct file *file)
@@ -126,7 +126,7 @@ static int aufs_release_dir(struct inode *inode, struct file *file)
 		free_vdir(vdir_cache);
 	fi_write_unlock(file);
 	si_read_unlock(sb);
-	fin_finfo(file);
+	au_fin_finfo(file);
 	return 0;
 }
 
@@ -196,15 +196,15 @@ static int aufs_fsync_dir(struct file *file, struct dentry *dentry,
 	sb = dentry->d_sb;
 	si_read_lock(sb);
 	if (file) {
-		err = reval_and_lock_finfo(file, reopen_dir, /*wlock*/1,
-					   /*locked*/1);
+		err = au_reval_and_lock_finfo(file, reopen_dir, /*wlock*/1,
+					      /*locked*/1);
 		//err = -1;
 		if (unlikely(err))
 			goto out;
 	} else
-		di_read_lock(dentry, 0);
+		di_read_lock_child(dentry, !AUFS_I_WLOCK);
 
-	ii_write_lock(inode);
+	ii_write_lock_child(inode);
 	if (file) {
 		bend = fbend(file);
 		for (bindex = fbstart(file); !err && bindex <= bend; bindex++) {
@@ -214,7 +214,7 @@ static int aufs_fsync_dir(struct file *file, struct dentry *dentry,
 
 			err = -EINVAL;
 			if (hidden_file->f_op && hidden_file->f_op->fsync) {
-				// priv?
+				// todo: apparmor thread?
 				// todo: try do_fsync() in fs/sync.c
 				i_lock(hidden_file->f_dentry->d_inode);
 				err = hidden_file->f_op->fsync
@@ -226,12 +226,12 @@ static int aufs_fsync_dir(struct file *file, struct dentry *dentry,
 		}
 	} else
 		err = fsync_dir(dentry, datasync);
-	cpup_attr_timesizes(inode);
+	au_cpup_attr_timesizes(inode);
 	ii_write_unlock(inode);
 	if (file)
 		fi_write_unlock(file);
 	else
-		di_read_unlock(dentry, 0);
+		di_read_unlock(dentry, !AUFS_I_WLOCK);
 
  out:
 	si_read_unlock(sb);
@@ -255,19 +255,20 @@ static int aufs_readdir(struct file *file, void *dirent, filldir_t filldir)
 
 	sb = dentry->d_sb;
 	si_read_lock(sb);
-	err = reval_and_lock_finfo(file, reopen_dir, /*wlock*/1, /*locked*/1);
+	err = au_reval_and_lock_finfo(file, reopen_dir, /*wlock*/1,
+				      /*locked*/1);
 	if (unlikely(err))
 		goto out;
 
-	ii_write_lock(inode);
-	err = init_vdir(file);
+	ii_write_lock_child(inode);
+	err = au_init_vdir(file);
 	if (unlikely(err))
 		goto out_unlock;
 	//DbgVdir(fvdir_cache(file));// goto out_unlock;
 
 	/* nfsd filldir calls lookup_one_len(). */
 	ii_downgrade_lock(inode);
-	err = fill_de(file, dirent, filldir);
+	err = au_fill_de(file, dirent, filldir);
 	//DbgVdir(fvdir_cache(file));// goto out_unlock;
 
  out_unlock:
@@ -323,31 +324,29 @@ static int test_empty_cb(void *__arg, const char *__name, int namelen,
 
 static int do_test_empty(struct dentry *dentry, struct test_empty_arg *arg)
 {
-	int err;
+	int err, dlgt;
 	struct file *hidden_file;
-	//struct aufs_h_ipriv ipriv;
 
 	LKTRTrace("%.*s, {%p, %d, %d}\n",
 		  DLNPair(dentry), arg->whlist, arg->whonly, arg->bindex);
 
 	hidden_file = hidden_open(dentry, arg->bindex,
-				  O_RDONLY | O_NONBLOCK | O_DIRECTORY);
+				  O_RDONLY | O_NONBLOCK | O_DIRECTORY
+				  | O_LARGEFILE);
 	err = PTR_ERR(hidden_file);
 	if (IS_ERR(hidden_file))
 		goto out;
 
-	/* security_file_permission() doesn't support PRIVATE */
-	//h_ipriv(hidden_file->f_dentry->d_inode, &ipriv, dentry->d_sb, /*do_lock*/1);
+	dlgt = need_dlgt(dentry->d_sb);
 	//hidden_file->f_pos = 0;
 	do {
 		arg->err = 0;
 		arg->called = 0;
 		//smp_mb();
-		err = vfs_readdir(hidden_file, test_empty_cb, arg);
+		err = vfsub_readdir(hidden_file, test_empty_cb, arg, dlgt);
 		if (err >= 0)
 			err = arg->err;
 	} while (!err && arg->called);
-	//h_iunpriv(&ipriv, /*do_lock*/1);
 	fput(hidden_file);
 	sbr_put(dentry->d_sb, arg->bindex);
 
@@ -373,7 +372,6 @@ static int sio_test_empty(struct dentry *dentry, struct test_empty_arg *arg)
 	int err;
 	struct dentry *hidden_dentry;
 	struct inode *hidden_inode;
-	struct aufs_h_ipriv ipriv;
 
 	LKTRTrace("%.*s\n", DLNPair(dentry));
 	hidden_dentry = h_dptr_i(dentry, arg->bindex);
@@ -381,10 +379,10 @@ static int sio_test_empty(struct dentry *dentry, struct test_empty_arg *arg)
 	hidden_inode = hidden_dentry->d_inode;
 	DEBUG_ON(!hidden_inode || !S_ISDIR(hidden_inode->i_mode));
 
-	i_lock_priv(hidden_inode, &ipriv, dentry->d_sb);
-	err = test_perm(hidden_inode, MAY_EXEC | MAY_READ);
-	/* keep it PRIVATE */
-	i_unlock_priv(hidden_inode, NULL);
+	hi_lock_child(hidden_inode);
+	err = au_test_perm(hidden_inode, MAY_EXEC | MAY_READ,
+			   need_dlgt(dentry->d_sb));
+	i_unlock(hidden_inode);
 	if (!err)
 		err = do_test_empty(dentry, arg);
 	else {
@@ -393,16 +391,14 @@ static int sio_test_empty(struct dentry *dentry, struct test_empty_arg *arg)
 			.dentry	= dentry,
 			.arg	= arg
 		};
-		wkq_wait(call_do_test_empty, &args);
+		wkq_wait(call_do_test_empty, &args, /*dlgt*/0);
 	}
-	/* revert PRIVATE */
-	h_iunpriv(&ipriv, /*do_lock*/1);
 
 	TraceErr(err);
 	return err;
 }
 
-int test_empty_lower(struct dentry *dentry)
+int au_test_empty_lower(struct dentry *dentry)
 {
 	int err;
 	struct inode *inode;
@@ -472,7 +468,7 @@ int test_empty(struct dentry *dentry, struct aufs_nhash *whlist)
 
 /* ---------------------------------------------------------------------- */
 
-void add_nlink(struct inode *dir, struct inode *h_dir)
+void au_add_nlink(struct inode *dir, struct inode *h_dir)
 {
 	DEBUG_ON(!S_ISDIR(dir->i_mode) || !S_ISDIR(h_dir->i_mode));
 	dir->i_nlink += h_dir->i_nlink - 2;
@@ -480,7 +476,7 @@ void add_nlink(struct inode *dir, struct inode *h_dir)
 		dir->i_nlink += 2;
 }
 
-void sub_nlink(struct inode *dir, struct inode *h_dir)
+void au_sub_nlink(struct inode *dir, struct inode *h_dir)
 {
 	DEBUG_ON(!S_ISDIR(dir->i_mode) || !S_ISDIR(h_dir->i_mode));
 	dir->i_nlink -= h_dir->i_nlink - 2;

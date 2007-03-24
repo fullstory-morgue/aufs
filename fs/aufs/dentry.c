@@ -16,27 +16,43 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: dentry.c,v 1.31 2007/02/19 03:26:18 sfjro Exp $ */
+/* $Id: dentry.c,v 1.34 2007/03/19 04:31:31 sfjro Exp $ */
 
 //#include <linux/fs.h>
 //#include <linux/namei.h>
 #include "aufs.h"
 
-#ifdef CONFIG_AUFS_LHASH_PATCH
-/* it doesn't mntget() */
-struct vfsmount *mnt_nfs(struct super_block *sb, aufs_bindex_t bindex)
-{
-	struct vfsmount *h_mnt;
+//todo: refine this condition
+#if defined(CONFIG_AUFS_LHASH_PATCH) || defined(CONFIG_AUFS_DLGT)
+struct lookup_hash_args {
+	struct dentry **errp;
+	struct qstr *name;
+	struct dentry *base;
+	struct nameidata *nd;
+};
 
-	h_mnt = sbr_mnt(sb, bindex);
-	if (!SB_NFS(h_mnt->mnt_sb))
-		return NULL;
-	return h_mnt;
+static void call_lookup_hash(void *args)
+{
+	struct lookup_hash_args *a = args;
+	*a->errp = __lookup_hash(a->name, a->base, a->nd);
+}
+
+struct lookup_one_len_args {
+	struct dentry **errp;
+	const char *name;
+	struct dentry *parent;
+	int len;
+};
+
+static void call_lookup_one_len(void *args)
+{
+	struct lookup_one_len_args *a = args;
+	*a->errp = lookup_one_len(a->name, a->parent, a->len);
 }
 
 /* cf. lookup_one_len() in linux/fs/namei.c */
 struct dentry *lkup_one(const char *name, struct dentry *parent, int len,
-			struct vfsmount *mnt)
+			struct lkup_args *lkup)
 {
 	struct dentry *dentry;
 	char *p;
@@ -45,10 +61,25 @@ struct dentry *lkup_one(const char *name, struct dentry *parent, int len,
 	unsigned int c;
 	struct nameidata tmp_nd;
 
-	LKTRTrace("%.*s/%.*s, mnt %p\n", DLNPair(parent), len, name, mnt);
+	LKTRTrace("%.*s/%.*s, lkup{%p, %d}\n",
+		  DLNPair(parent), len, name, lkup->nfsmnt, lkup->dlgt);
 
-	if (!mnt)
-		return lookup_one_len(name, parent, len);
+	if (!lkup->nfsmnt) {
+		// todo: optimize
+		if (!lkup->dlgt)
+			return lookup_one_len(name, parent, len);
+		else {
+			/* lookup by kthread keeping privilege */
+			struct lookup_one_len_args args = {
+				.errp	= &dentry,
+				.name	= name,
+				.parent	= parent,
+				.len	= len
+			};
+			wkq_wait(call_lookup_one_len, &args, /*dlgt*/1);
+			return dentry;
+		}
+	}
 
 	dentry = ERR_PTR(-EACCES);
 	this.name = name;
@@ -68,8 +99,18 @@ struct dentry *lkup_one(const char *name, struct dentry *parent, int len,
 
 	memset(&tmp_nd, 0, sizeof(tmp_nd));
 	tmp_nd.dentry = dget(parent);
-	tmp_nd.mnt = mntget(mnt);
-	dentry = __lookup_hash(&this, parent, &tmp_nd);
+	tmp_nd.mnt = mntget(lkup->nfsmnt);
+	if (!lkup->dlgt)
+		dentry = __lookup_hash(&this, parent, &tmp_nd);
+	else {
+		struct lookup_hash_args args = {
+			.errp	= &dentry,
+			.name	= &this,
+			.base	= parent,
+			.nd	= &tmp_nd
+		};
+		wkq_wait(call_lookup_hash, &args, /*dlgt*/1);
+	}
 	path_release(&tmp_nd);
 
  out:
@@ -83,13 +124,13 @@ struct lkup_one_args {
 	const char *name;
 	struct dentry *parent;
 	int len;
-	struct vfsmount *mnt;
+	struct lkup_args *lkup;
 };
 
 static void call_lkup_one(void *args)
 {
 	struct lkup_one_args *a = args;
-	*a->errp = lkup_one(a->name, a->parent, a->len, a->mnt);
+	*a->errp = lkup_one(a->name, a->parent, a->len, a->lkup);
 }
 
 /*
@@ -99,19 +140,18 @@ static void call_lkup_one(void *args)
 static struct dentry *do_lookup(struct dentry *hidden_parent,
 				struct dentry *dentry, aufs_bindex_t bindex,
 				struct qstr *wh_name, int allow_neg,
-				mode_t type)
+				mode_t type, int dlgt)
 {
 	struct dentry *hidden_dentry;
 	int wh_found, wh_able, opq;
 	struct inode *hidden_dir, *hidden_inode;
 	struct qstr *name;
-	struct vfsmount *h_mnt;
-	struct aufs_h_ipriv ipriv;
 	struct super_block *sb;
+	struct lkup_args lkup = {.dlgt = dlgt};
 
-	LKTRTrace("%.*s/%.*s, b%d, allow_neg %d, type 0%o\n",
+	LKTRTrace("%.*s/%.*s, b%d, allow_neg %d, type 0%o, dlgt %d\n",
 		  DLNPair(hidden_parent), DLNPair(dentry), bindex, allow_neg,
-		  type);
+		  type, dlgt);
 	DEBUG_ON(IS_ROOT(dentry));
 	hidden_dir = hidden_parent->d_inode;
 	IMustLock(hidden_dir);
@@ -119,17 +159,17 @@ static struct dentry *do_lookup(struct dentry *hidden_parent,
 	wh_found = 0;
 	sb = dentry->d_sb;
 	wh_able = (sbr_perm(sb, bindex) & (MAY_WRITE | AUFS_MAY_WH));
-	h_mnt = mnt_nfs(sb, bindex);
+	lkup.nfsmnt = mnt_nfs(sb, bindex);
 	name = &dentry->d_name;
 	if (unlikely(wh_able)) {
-#if 0 //def CONFIG_AUFS_NEST
+#if 0 //def CONFIG_AUFS_AS_BRANCH
 		if (strncmp(name->name, AUFS_WH_PFX, AUFS_WH_LEN))
 			wh_found = is_wh(hidden_parent, wh_name, /*try_sio*/0,
-					 h_mnt);
+					 &lkup);
 		else
 			wh_found = -EPERM;
 #else
-		wh_found = is_wh(hidden_parent, wh_name, /*try_sio*/0, h_mnt);
+		wh_found = is_wh(hidden_parent, wh_name, /*try_sio*/0, &lkup);
 #endif
 	}
 	//if (LktrCond) wh_found = -1;
@@ -147,7 +187,7 @@ static struct dentry *do_lookup(struct dentry *hidden_parent,
 
  real_lookup:
 	// do not superio.
-	hidden_dentry = lkup_one(name->name, hidden_parent, name->len, h_mnt);
+	hidden_dentry = lkup_one(name->name, hidden_parent, name->len, &lkup);
 	//if (LktrCond) {dput(hidden_dentry); hidden_dentry = ERR_PTR(-1);}
 	if (IS_ERR(hidden_dentry))
 		goto out;
@@ -169,10 +209,10 @@ static struct dentry *do_lookup(struct dentry *hidden_parent,
 	if (!hidden_inode || !S_ISDIR(hidden_inode->i_mode) || !wh_able)
 		return hidden_dentry; /* success */
 
-	i_lock_priv(hidden_inode, &ipriv, sb);
-	opq = is_diropq(hidden_dentry, h_mnt);
+	hi_lock_child(hidden_inode);
+	opq = is_diropq(hidden_dentry, &lkup);
 	//if (LktrCond) opq = -1;
-	i_unlock_priv(hidden_inode, &ipriv);
+	i_unlock(hidden_inode);
 	if (opq > 0)
 		set_dbdiropq(dentry, bindex);
 	else if (unlikely(opq < 0)) {
@@ -195,7 +235,7 @@ static struct dentry *do_lookup(struct dentry *hidden_parent,
  */
 int lkup_dentry(struct dentry *dentry, aufs_bindex_t bstart, mode_t type)
 {
-	int npositive, err, allow_neg;
+	int npositive, err, allow_neg, dlgt;
 	struct dentry *parent;
 	aufs_bindex_t bindex, btail;
 	const struct qstr *name = &dentry->d_name;
@@ -206,18 +246,19 @@ int lkup_dentry(struct dentry *dentry, aufs_bindex_t bstart, mode_t type)
 	DEBUG_ON(bstart < 0 || IS_ROOT(dentry));
 	parent = dentry->d_parent;
 
-#if 1 //ndef CONFIG_AUFS_NEST
+#if 1 //ndef CONFIG_AUFS_AS_BRANCH
 	err = -EPERM;
 	if (unlikely(!strncmp(name->name, AUFS_WH_PFX, AUFS_WH_LEN)))
 		goto out;
 #endif
 
-	err = alloc_whname(name->name, name->len, &whname);
-	//if (LktrCond) {free_whname(&whname); err = -1;}
+	err = au_alloc_whname(name->name, name->len, &whname);
+	//if (LktrCond) {au_free_whname(&whname); err = -1;}
 	if (unlikely(err))
 		goto out;
 
 	sb = dentry->d_sb;
+	dlgt = need_dlgt(sb);
 	allow_neg = !type;
 	npositive = 0;
 	btail = dbtaildir(parent);
@@ -225,7 +266,6 @@ int lkup_dentry(struct dentry *dentry, aufs_bindex_t bstart, mode_t type)
 		struct dentry *hidden_parent, *hidden_dentry;
 		struct inode *hidden_inode;
 		struct inode *hidden_dir;
-		struct aufs_h_ipriv ipriv;
 
 		hidden_dentry = h_dptr_i(dentry, bindex);
 		if (hidden_dentry) {
@@ -242,12 +282,12 @@ int lkup_dentry(struct dentry *dentry, aufs_bindex_t bstart, mode_t type)
 		if (!hidden_dir || !S_ISDIR(hidden_dir->i_mode))
 			continue;
 
-		i_lock_priv(hidden_dir, &ipriv, sb);
+		hi_lock_parent(hidden_dir);
 		hidden_dentry = do_lookup(hidden_parent, dentry, bindex,
-					  &whname, allow_neg, type);
+					  &whname, allow_neg, type, dlgt);
 		// do not dput for testing
 		//if (LktrCond) {hidden_dentry = ERR_PTR(-1);}
-		i_unlock_priv(hidden_dir, &ipriv);
+		i_unlock(hidden_dir);
 		err = PTR_ERR(hidden_dentry);
 		if (IS_ERR(hidden_dentry))
 			goto out_wh;
@@ -271,36 +311,40 @@ int lkup_dentry(struct dentry *dentry, aufs_bindex_t bstart, mode_t type)
 
 	if (npositive) {
 		LKTRLabel(positive);
-		update_dbstart(dentry);
+		au_update_dbstart(dentry);
 	}
 	err = npositive;
 
  out_wh:
-	free_whname(&whname);
+	au_free_whname(&whname);
  out:
 	TraceErr(err);
 	return err;
 }
 
 struct dentry *sio_lkup_one(const char *name, struct dentry *parent, int len,
-			    struct vfsmount *mnt)
+			    struct lkup_args *lkup)
 {
 	struct dentry *dentry;
 
 	LKTRTrace("%.*s/%.*s\n", DLNPair(parent), len, name);
 	IMustLock(parent->d_inode);
 
-	if (!test_perm(parent->d_inode, MAY_EXEC))
-		dentry = lkup_one(name, parent, len, mnt);
+	if (!au_test_perm(parent->d_inode, MAY_EXEC, lkup->dlgt))
+		dentry = lkup_one(name, parent, len, lkup);
 	else {
+		// ugly
+		int dlgt = lkup->dlgt;
 		struct lkup_one_args args = {
 			.errp	= &dentry,
 			.name	= name,
 			.parent	= parent,
 			.len	= len,
-			.mnt	= mnt
+			.lkup	= lkup
 		};
-		wkq_wait(call_lkup_one, &args);
+		lkup->dlgt = 0;
+		wkq_wait(call_lkup_one, &args, /*dlgt*/0);
+		lkup->dlgt = dlgt;
 	}
 
 	TraceErrPtr(dentry);
@@ -315,6 +359,7 @@ int lkup_neg(struct dentry *dentry, aufs_bindex_t bindex)
 	int err;
 	struct dentry *parent, *hidden_parent, *hidden_dentry;
 	struct inode *hidden_dir;
+	struct lkup_args lkup;
 
 	LKTRTrace("%.*s, b%d\n", DLNPair(dentry), bindex);
 	parent = dentry->d_parent;
@@ -326,9 +371,10 @@ int lkup_neg(struct dentry *dentry, aufs_bindex_t bindex)
 	DEBUG_ON(!hidden_dir || !S_ISDIR(hidden_dir->i_mode));
 	IMustLock(hidden_dir);
 
+	lkup.nfsmnt = mnt_nfs(dentry->d_sb, bindex);
+	lkup.dlgt = need_dlgt(dentry->d_sb);
 	hidden_dentry = sio_lkup_one(dentry->d_name.name, hidden_parent,
-				     dentry->d_name.len,
-				     mnt_nfs(dentry->d_sb, bindex));
+				     dentry->d_name.len, &lkup);
 	//if (LktrCond) {dput(hidden_dentry); hidden_dentry = ERR_PTR(-1);}
 	err = PTR_ERR(hidden_dentry);
 	if (IS_ERR(hidden_dentry))
@@ -357,7 +403,7 @@ int lkup_neg(struct dentry *dentry, aufs_bindex_t bindex)
  * returns the number of found hidden positive dentries,
  * otherwise an error.
  */
-int refresh_hdentry(struct dentry *dentry, mode_t type)
+int au_refresh_hdentry(struct dentry *dentry, mode_t type)
 {
 	int npositive, pgen, new_sz, sgen, dgen;
 	struct aufs_dinfo *dinfo;
@@ -373,7 +419,7 @@ int refresh_hdentry(struct dentry *dentry, mode_t type)
 	DEBUG_ON(IS_ROOT(dentry));
 	parent = dentry->d_parent; // dget_parent()
 	pgen = digen(parent);
-	sgen = sigen(sb);
+	sgen = au_sigen(sb);
 	dgen = digen(dentry);
 	DEBUG_ON(pgen != sgen
 		 || AufsGenOlder(sgen, dgen)
@@ -406,7 +452,7 @@ int refresh_hdentry(struct dentry *dentry, mode_t type)
 		if (hd->d_parent == h_dptr_i(parent, bindex)) // dget_parent()
 			continue;
 
-		new_bindex = find_dbindex(parent, hd->d_parent); // dget_parent()
+		new_bindex = au_find_dbindex(parent, hd->d_parent); // dget_parent()
 		DEBUG_ON(new_bindex == bindex);
 		if (dinfo->di_bwh == bindex)
 			bwh = new_bindex;
@@ -463,7 +509,7 @@ int refresh_hdentry(struct dentry *dentry, mode_t type)
 		goto out;
 
  out_dgen:
-	update_digen(dentry);
+	au_update_digen(dentry);
  out:
 	TraceErr(npositive);
 	return npositive;
@@ -511,7 +557,7 @@ static int hidden_d_revalidate(struct dentry *dentry, struct nameidata *nd)
 		fake_nd = *nd;
 #ifndef CONFIG_AUFS_FAKE_DM
 		if (dentry != nd->dentry) {
-			di_read_lock(nd->dentry, 0);
+			di_read_lock_parent(nd->dentry, 0);
 			locked = 1;
 		}
 #endif
@@ -525,24 +571,11 @@ static int hidden_d_revalidate(struct dentry *dentry, struct nameidata *nd)
 		if (hidden_dentry->d_op)
 			reval = hidden_dentry->d_op->d_revalidate;
 		if (unlikely(reval)) {
+			//LKTRLabel(hidden reval);
 			p = fake_dm(&fake_nd, nd, sb, bindex);
 			DEBUG_ON(IS_ERR(p));
-			if (unlikely(!reval(hidden_dentry, p))) {
+			if (unlikely(!reval(hidden_dentry, p)))
 				err = -EINVAL;
-#if 0
-				if (unlikely(SB_AUFS(hidden_dentry->d_sb))) {
-					struct dentry *h_d;
-					struct qstr *name = &hidden_dentry->d_name;
-					h_d = lkup_one(name->name, hidden_dentry->d_parent,
-						       name->len, NULL);
-					if (!IS_ERR(h_d)) {
-						if (h_d == hidden_dentry)
-							err = 0;
-						dput(h_d);
-					}
-				}
-#endif
-			}
 			fake_dm_release(p);
 			if (unlikely(err))
 				break;
@@ -575,7 +608,7 @@ static int hidden_d_revalidate(struct dentry *dentry, struct nameidata *nd)
 			 || !timespec_equal(&inode->i_atime, &first->i_atime))
 #endif
 	if (unlikely(!err && udba && first))
-		cpup_attr_all(inode);
+		au_cpup_attr_all(inode);
 #endif
 
 	TraceErr(err);
@@ -597,7 +630,7 @@ static int simple_reval_dpath(struct dentry *dentry, int sgen)
 		return 0;
 
 	parent = dget_parent(dentry);
-	di_read_lock(parent, AUFS_I_RLOCK);
+	di_read_lock_parent(parent, AUFS_I_RLOCK);
 	DEBUG_ON(digen(parent) != sgen);
 #ifdef CONFIG_AUFS_DEBUG
 	{
@@ -610,16 +643,16 @@ static int simple_reval_dpath(struct dentry *dentry, int sgen)
 #endif
 	type = dentry->d_inode->i_mode & S_IFMT;
 	/* returns a number of positive dentries */
-	err = refresh_hdentry(dentry, type);
+	err = au_refresh_hdentry(dentry, type);
 	if (err >= 0)
-		err = refresh_hinode(dentry);
+		err = au_refresh_hinode(dentry);
 	di_read_unlock(parent, AUFS_I_RLOCK);
 	dput(parent);
 	TraceErr(err);
 	return err;
 }
 
-int reval_dpath(struct dentry *dentry, int sgen)
+int au_reval_dpath(struct dentry *dentry, int sgen)
 {
 	int err;
 	struct dentry *d, *parent;
@@ -644,16 +677,17 @@ int reval_dpath(struct dentry *dentry, int sgen)
 		}
 
 		if (d != dentry)
-			di_write_lock(d);
+			di_write_lock_child(d);
 
 		/* someone might update our dentry while we were sleeping */
 		if (AufsGenOlder(digen(d), sgen)) {
-			di_read_lock(parent, AUFS_I_RLOCK);
+			di_read_lock_parent(parent, AUFS_I_RLOCK);
 			/* returns a number of positive dentries */
-			err = refresh_hdentry(d, d->d_inode->i_mode & S_IFMT);
+			err = au_refresh_hdentry(d,
+						 d->d_inode->i_mode & S_IFMT);
 			//err = -1;
 			if (err >= 0)
-				err = refresh_hinode(d);
+				err = au_refresh_hinode(d);
 			//err = -1;
 			di_read_unlock(parent, AUFS_I_RLOCK);
 		}
@@ -687,27 +721,23 @@ static int aufs_d_revalidate(struct dentry *dentry, struct nameidata *nd)
 	err = -EINVAL;
 	DEBUG_ON(direval_test(dentry) < 0);
 	if (unlikely(direval_test(dentry))) {
-#ifdef ForceHinotify
+#ifdef ForceInotify
 		Dbg("UDBA %.*s\n", DLNPair(dentry));
 #endif
-		if (IS_ROOT(dentry))
-			atomic_set(&dtodi(dentry)->di_reval, 0);
-#if 0
 		/* root directory was handled in aufs_inotify() */
 		DEBUG_ON(IS_ROOT(dentry));
-#endif
 		goto out;
 	}
 
 	sb = dentry->d_sb;
 	si_read_lock(sb);
-	sgen = sigen(dentry->d_sb);
+	sgen = au_sigen(dentry->d_sb);
 	if (digen(dentry) == sgen)
-		di_read_lock(dentry, AUFS_I_RLOCK);
+		di_read_lock_child(dentry, AUFS_I_RLOCK);
 	else {
 		DEBUG_ON(!dentry->d_inode);
-		di_write_lock(dentry);
-		err = reval_dpath(dentry, sgen);
+		di_write_lock_child(dentry);
+		err = au_reval_dpath(dentry, sgen);
 		//err = -1;
 		di_downgrade_lock(dentry, AUFS_I_RLOCK);
 		if (unlikely(err))
@@ -719,7 +749,7 @@ static int aufs_d_revalidate(struct dentry *dentry, struct nameidata *nd)
 	if (S_ISDIR(inode->i_mode)) {
 		i_lock(inode);
 		ii_write_lock(inode);
-		cpup_attr_nlink(inode);
+		au_cpup_attr_nlink(inode);
 		ii_write_unlock(inode);
 		i_unlock(inode);
 	}
@@ -768,6 +798,7 @@ static void aufs_d_release(struct dentry *dentry)
 	cache_free_dinfo(dinfo);
 }
 
+#if 0
 /* it may be called at remount time, too */
 static void aufs_d_iput(struct dentry *dentry, struct inode *inode)
 {
@@ -776,18 +807,21 @@ static void aufs_d_iput(struct dentry *dentry, struct inode *inode)
 	LKTRTrace("%.*s, i%lu\n", DLNPair(dentry), inode->i_ino);
 
 	sb = dentry->d_sb;
+#if 0
 	si_read_lock(sb);
-	if (unlikely(IS_MS(sb, MS_PLINK) && is_plinked(sb, inode))) {
+	if (unlikely(IS_MS(sb, MS_PLINK) && au_is_plinked(sb, inode))) {
 		ii_write_lock(inode);
-		update_brange(inode, 1);
+		au_update_brange(inode, 1);
 		ii_write_unlock(inode);
 	}
 	si_read_unlock(sb);
+#endif
 	iput(inode);
 }
+#endif
 
 struct dentry_operations aufs_dop = {
 	.d_revalidate	= aufs_d_revalidate,
-	.d_release	= aufs_d_release,
-	.d_iput		= aufs_d_iput
+	.d_release	= aufs_d_release
+	//.d_iput		= aufs_d_iput
 };

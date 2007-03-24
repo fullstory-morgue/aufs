@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: super.c,v 1.37 2007/02/19 03:29:30 sfjro Exp $ */
+/* $Id: super.c,v 1.42 2007/03/20 07:30:32 sfjro Exp $ */
 
 #include <linux/module.h>
 #include <linux/seq_file.h>
@@ -47,7 +47,7 @@ static struct inode *aufs_alloc_inode(struct super_block *sb)
 static void aufs_destroy_inode(struct inode *inode)
 {
 	LKTRTrace("i%lu\n", inode->i_ino);
-	iinfo_fin(inode);
+	au_iinfo_fin(inode);
 	cache_free_icntnr(container_of(inode, struct aufs_icntnr, vfs_inode));
 }
 
@@ -57,7 +57,7 @@ static void aufs_read_inode(struct inode *inode)
 
 	LKTRTrace("i%lu\n", inode->i_ino);
 
-	err = iinfo_init(inode);
+	err = au_iinfo_init(inode);
 	//if (LktrCond) err = -1;
 	if (!err) {
 		inode->i_version++;
@@ -71,18 +71,41 @@ static void aufs_read_inode(struct inode *inode)
 	make_bad_inode(inode);
 }
 
-static int pr_esc(struct seq_file *m, char *p)
+int au_show_brs(struct seq_file *seq, struct super_block *sb)
 {
-	return seq_escape(m, p, " \t\n\\");
+	int err;
+	aufs_bindex_t bindex, bend;
+	char a[8];
+	struct dentry *root;
+
+	TraceEnter();
+	SiMustAnyLock(sb);
+	root = sb->s_root;
+	DiMustAnyLock(root);
+
+	err = 0;
+	bend = sbend(sb);
+	for (bindex = 0; !err && bindex <= bend; bindex++) {
+		err = sbr_perm_str(sb, bindex, a, sizeof(a));
+		if (!err)
+			err = seq_path(seq, sbr_mnt(sb, bindex),
+				       h_dptr_i(root, bindex), esc_chars);
+		if (err > 0)
+			err = seq_printf(seq, "=%s", a);
+		if (!err && bindex != bend)
+			err = seq_putc(seq, ':');
+	}
+
+	TraceErr(err);
+	return err;
 }
 
 static int aufs_show_options(struct seq_file *m, struct vfsmount *mnt)
 {
 	int err, n;
-	aufs_bindex_t bindex, bend;
 	struct super_block *sb;
 	struct aufs_sbinfo *sbinfo;
-	char *hidden_path, *page;
+	char *page;
 	struct dentry *root;
 
 	TraceEnter();
@@ -114,71 +137,61 @@ static int aufs_show_options(struct seq_file *m, struct vfsmount *mnt)
 		DEBUG_ON(strcmp(q, Deleted));
 #undef Deleted
 		*q = 0;
-		seq_printf(m, ",xino=");
-		pr_esc(m, p);
+		seq_puts(m, ",xino=");
+		seq_escape(m, p, esc_chars);
 	} else
-		seq_printf(m, ",noxino");
+		seq_puts(m, ",noxino");
 	n = IS_MS(sb, MS_PLINK);
 	if (unlikely((MS_DEF & MS_PLINK) != n))
 		seq_printf(m, ",%splink", n ? "" : "no");
 	n = MS_UDBA(sb);
-	if (unlikely(n != MS_UDBA_DEF))
+	if (unlikely((MS_DEF & MS_UDBA_MASK) != n))
 		seq_printf(m, ",udba=%s", udba_str(n));
 	n = IS_MS(sb, MS_ALWAYS_DIROPQ);
 	if (unlikely((MS_DEF & MS_ALWAYS_DIROPQ) != n))
 		seq_printf(m, ",diropq=%c", n ? 'a' : 'w');
-	n = IS_MS(sb, MS_IPRIVATE);
-	if (unlikely((MS_DEF & MS_IPRIVATE) != n))
-		seq_printf(m, ",%sipriv", n ? "" : "no");
+	n = IS_MS(sb, MS_DLGT);
+	if (unlikely((MS_DEF & MS_DLGT) != n))
+		seq_printf(m, ",%sdlgt", n ? "" : "no");
 	n = sbinfo->si_dirwh;
 	if (unlikely(n != AUFS_DIRWH_DEF))
 		seq_printf(m, ",dirwh=%d", n);
 	n = sbinfo->si_rdcache / HZ;
 	if (unlikely(n != AUFS_RDCACHE_DEF))
 		seq_printf(m, ",rdcache=%d", n);
+#if 0
 	n = MS_COO(sb);
-	if (unlikely(n != MS_COO_DEF))
+	if (unlikely((MS_DEF & MS_COO_MASK) != n))
 		seq_printf(m, ",coo=%s", coo_str(n));
-
-#ifdef CONFIG_AUFS_COMPAT
-	seq_printf(m, ",dirs=");
-#else
-	seq_printf(m, ",br:");
 #endif
+
 	err = 0;
-	bend = sbend(sb);
-	for (bindex = 0; bindex <= bend; bindex++) {
-		char a[16];
-		hidden_path = d_path(h_dptr_i(root, bindex),
-				     sbr_mnt(sb, bindex), page, PATH_MAX);
-		//if (LktrCond) hidden_path = ERR_PTR(-1);
-		err = PTR_ERR(hidden_path);
-		if (IS_ERR(hidden_path))
-			break;
-		err = sbr_perm_str(sb, bindex, a, sizeof(a));
-		//if (LktrCond) err = -1;
-		if (unlikely(err))
-			break;
-		pr_esc(m, hidden_path);
-		seq_printf(m, "=%s", a);
-		if (bindex != bend)
-			seq_printf(m, ":");
+	if (!sysaufs_brs) {
+#ifdef CONFIG_AUFS_COMPAT
+		err = seq_puts(m, ",dirs=");
+#else
+		err = seq_puts(m, ",br:");
+#endif
+		if (!err)
+			err = au_show_brs(m, sb);
 	}
 
  out_unlock:
 	aufs_read_unlock(root, !AUFS_I_RLOCK);
 	__putname(page);
  out:
+	if (err)
+		err = -E2BIG;
 	TraceErr(err);
 	return err;
 }
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,18)
-#define StatfsLock(d)	aufs_read_lock(d->d_sb->s_root, 0)
-#define StatfsUnlock(d)	aufs_read_unlock(d->d_sb->s_root, 0)
-#define StatfsArg(d)	h_dptr(d->d_sb->s_root)
+#define StatfsLock(d)	aufs_read_lock((d)->d_sb->s_root, 0)
+#define StatfsUnlock(d)	aufs_read_unlock((d)->d_sb->s_root, 0)
+#define StatfsArg(d)	h_dptr((d)->d_sb->s_root)
 #define StatfsHInode(d)	StatfsArg(d)->d_inode
-#define StatfsSb(d)	d->d_sb
+#define StatfsSb(d)	(d)->d_sb
 static int aufs_statfs(struct dentry *arg, struct kstatfs *buf)
 #else
 #define StatfsLock(s)	si_read_lock(s)
@@ -190,16 +203,11 @@ static int aufs_statfs(struct super_block *arg, struct kstatfs *buf)
 #endif
 {
 	int err;
-	struct inode *h_inode;
-	struct aufs_h_ipriv ipriv;
 
 	TraceEnter();
 
 	StatfsLock(arg);
-	h_inode = StatfsHInode(arg);
-	h_ipriv(h_inode, &ipriv, StatfsSb(arg), /*do_lock*/1);
-	err = vfs_statfs(StatfsArg(arg), buf);
-	h_iunpriv(&ipriv, /*do_lock*/1);
+	err = vfsub_statfs(StatfsArg(arg), buf, need_dlgt(StatfsSb(arg)));
 	//if (LktrCond) err = -1;
 	StatfsUnlock(arg);
 	if (!err) {
@@ -213,29 +221,29 @@ static int aufs_statfs(struct super_block *arg, struct kstatfs *buf)
 	TraceErr(err);
 	return err;
 }
-#undef StatfsSb
-#undef StatfsArg
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,18)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,18) || defined(UbuntuEdgy17Umount18)
 #define UmountBeginSb(mnt)	(mnt)->mnt_sb
 static void aufs_umount_begin(struct vfsmount *arg, int flags)
 #else
-#define UmountBeginSb(sb)	(sb)
+#define UmountBeginSb(sb)	sb
 static void aufs_umount_begin(struct super_block *arg)
 #endif
 {
 	struct super_block *sb = UmountBeginSb(arg);
 
+	if (unlikely(!stosi(sb)))
+		return;
+
 	si_write_lock(sb);
 	if (IS_MS(sb, MS_PLINK)) {
-		put_plink(sb);
+		au_put_plink(sb);
 		//kobj_umount(stosi(sb));
 	}
 	si_write_unlock(sb);
 }
-#undef UmountBeginSb
 
-static void free_sbinfo(struct aufs_sbinfo *sbinfo)
+static void free_sbinfo(struct aufs_sbinfo *sbinfo, int err)
 {
 	TraceEnter();
 	DEBUG_ON(!sbinfo);
@@ -244,6 +252,8 @@ static void free_sbinfo(struct aufs_sbinfo *sbinfo)
 	rw_destroy(&sbinfo->si_rwsem);
 	free_branches(sbinfo);
 	kfree(sbinfo->si_branch);
+	if (!err)
+		del_sbilist(sbinfo);
 	kfree(sbinfo);
 }
 
@@ -258,11 +268,11 @@ static void aufs_put_super(struct super_block *sb)
 	if (unlikely(!sbinfo))
 		return;
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,18)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,18) && !defined(UbuntuEdgy17Umount18)
 	// umount_begin() may not be called.
 	aufs_umount_begin(sb);
 #endif
-	free_sbinfo(sbinfo);
+	free_sbinfo(sbinfo, 0);
 }
 
 /* ---------------------------------------------------------------------- */
@@ -278,22 +288,18 @@ static int do_refresh_dir(struct dentry *dentry, unsigned int flags)
 	LKTRTrace("%.*s\n", DLNPair(dentry));
 	DEBUG_ON(!dentry->d_inode || !S_ISDIR(dentry->d_inode->i_mode));
 
-	di_write_lock(dentry);
+	di_write_lock_child(dentry);
 	parent = dentry->d_parent;
-	if (!IS_ROOT(parent))
-		di_read_lock(parent, AUFS_I_RLOCK);
-	else
-		DiMustAnyLock(parent);
-	err = refresh_hdentry(dentry, S_IFDIR);
+	di_read_lock_parent(parent, AUFS_I_RLOCK);
+	err = au_refresh_hdentry(dentry, S_IFDIR);
 	if (err >= 0) {
-		err = refresh_hinode(dentry);
+		err = au_refresh_hinode(dentry);
 		if (!err)
-			reset_hinotify(dentry->d_inode, flags);
+			au_reset_hinotify(dentry->d_inode, flags);
 	}
 	if (unlikely(err))
 		Err("unrecoverable error %d\n", err);
-	if (!IS_ROOT(parent))
-		di_read_unlock(parent, AUFS_I_RLOCK);
+	di_read_unlock(parent, AUFS_I_RLOCK);
 	di_write_unlock(dentry);
 
 	TraceErr(err);
@@ -305,12 +311,15 @@ static int refresh_dir(struct dentry *root, int sgen)
 	int err;
 	struct dentry *this_parent = root;
 	struct list_head *next;
-	const unsigned int flags = hi_flags(root->d_inode, /*isdir*/1);
+	const unsigned int flags = au_hi_flags(root->d_inode, /*isdir*/1);
 
 	LKTRTrace("sgen %d\n", sgen);
 	SiMustWriteLock(root->d_sb);
 	DEBUG_ON(digen(root) != sgen);
 	DiMustWriteLock(root);
+	DiMustNoWaiters(root);
+	IiMustNoWaiters(root->d_inode);
+	di_write_unlock(root);
 
 	err = 0;
 	//spin_lock(&dcache_lock);
@@ -352,6 +361,7 @@ static int refresh_dir(struct dentry *root, int sgen)
 	}
 
  out:
+	di_write_lock_child(root); /* aufs_write_lock() calls ..._child() */
 	//spin_unlock(&dcache_lock);
 	TraceErr(err);
 	return err;
@@ -408,13 +418,13 @@ static int aufs_remount_fs(struct super_block *sb, int *flags, char *data)
 	i_lock(inode);
 	aufs_write_lock(root);
 
-	v[Old][Sgen] = sigen(sb);
+	v[Old][Sgen] = au_sigen(sb);
 	v[Old][Hinotify] = IS_MS(sb, MS_UDBA_INOTIFY);
 	v[Old][Xino] = IS_MS(sb, MS_XINO);
 	err = do_opts(sb, &opts, /*remount*/1);
 	//if (LktrCond) err = -1;
 	free_opts(&opts);
-	v[New][Sgen] = sigen(sb);
+	v[New][Sgen] = au_sigen(sb);
 	v[New][Hinotify] = IS_MS(sb, MS_UDBA_INOTIFY);
 	v[New][Xino] = IS_MS(sb, MS_XINO);
 
@@ -436,6 +446,8 @@ static int aufs_remount_fs(struct super_block *sb, int *flags, char *data)
 
 	aufs_write_unlock(root);
 	i_unlock(inode);
+	if (refresh)
+		sysaufs_notify_remount();
 
  out_opts:
 	free_page((unsigned long)opts.opt);
@@ -493,7 +505,7 @@ static int alloc_sbinfo(struct super_block *sb)
 		kfree(sbinfo);
 		goto out;
 	}
-	rw_init_wlock(&sbinfo->si_rwsem);
+	rw_init_wlock(&sbinfo->si_rwsem, AUFS_LSC_SBINFO);
 	sbinfo->si_bend = -1;
 	atomic_long_set(&sbinfo->si_xino, AUFS_FIRST_INO);
 	spin_lock_init(&sbinfo->si_plink_lock);
@@ -508,6 +520,13 @@ static int alloc_sbinfo(struct super_block *sb)
 	//memset(&sbinfo->si_kobj, 0, sizeof(sbinfo->si_kobj));
 	sb->s_fs_info = sbinfo;
 	MS_SET(sb, MS_DEF);
+#ifdef ForceInotify
+	MS_CLR(sb, MS_UDBA_MASK);
+	MS_SET(sb, MS_UDBA_INOTIFY);
+#endif
+#ifdef ForceDlgt
+	MS_SET(sb, MS_DLGT);
+#endif
 	return 0; /* success */
 
  out:
@@ -540,7 +559,7 @@ static int alloc_root(struct super_block *sb)
 	if (unlikely(!root))
 		goto out_iput;
 	if (!IS_ERR(root)) {
-		err = alloc_dinfo(root);
+		err = au_alloc_dinfo(root);
 		//if (LktrCond){rw_write_unlock(&dtodi(root)->di_rwsem);err=-1;}
 		if (!err) {
 			sb->s_root = root;
@@ -609,9 +628,8 @@ static int aufs_fill_super(struct super_block *sb, void *raw_data, int silent)
 	DiMustWriteLock(root);
 	inode = root->d_inode;
 	inode->i_nlink = 2;
-	ii_write_lock(inode);
-
 	// lock vfs_inode first, then aufs.
+	ii_write_lock_parent(inode);
 	aufs_write_unlock(root);
 
 	/*
@@ -656,7 +674,8 @@ static int aufs_fill_super(struct super_block *sb, void *raw_data, int silent)
 		if (unlikely(hinotify)) {
 			MS_CLR(sb, MS_UDBA_INOTIFY);
 			MS_SET(sb, MS_UDBA_NONE);
-			reset_hinotify(inode, hi_flags(inode, 1) & ~AUFS_HI_XINO);
+			au_reset_hinotify
+				(inode, au_hi_flags(inode, 1) & ~AUFS_HI_XINO);
 		}
 
 		MS_SET(sb, MS_XINO);
@@ -682,7 +701,8 @@ static int aufs_fill_super(struct super_block *sb, void *raw_data, int silent)
 		if (unlikely(hinotify)) {
 			MS_CLR(sb, MS_UDBA_NONE);
 			MS_SET(sb, MS_UDBA_INOTIFY);
-			reset_hinotify(inode, hi_flags(inode, 1) & ~AUFS_HI_XINO);
+			au_reset_hinotify
+				(inode, au_hi_flags(inode, 1) & ~AUFS_HI_XINO);
 		}
 	}
 
@@ -690,6 +710,7 @@ static int aufs_fill_super(struct super_block *sb, void *raw_data, int silent)
 	aufs_write_unlock(root);
 	i_unlock(inode);
 	//DbgSb(sb);
+	add_sbilist(stosi(sb));
 	return 0; /* success */
 
  out_unlock:
@@ -699,7 +720,7 @@ static int aufs_fill_super(struct super_block *sb, void *raw_data, int silent)
 	dput(root);
 	sb->s_root = NULL;
  out_info:
-	free_sbinfo(stosi(sb));
+	free_sbinfo(stosi(sb), err);
 	sb->s_fs_info = NULL;
  out_opts:
 	free_page((unsigned long)opts.opt);
@@ -716,9 +737,14 @@ static int aufs_get_sb(struct file_system_type *fs_type, int flags,
 		       const char *dev_name, void *raw_data,
 		       struct vfsmount *mnt)
 {
+	int err;
+
 	/* all timestamps always follow the ones on the branch */
 	//mnt->mnt_flags |= MNT_NOATIME | MNT_NODIRATIME;
-	return get_sb_nodev(fs_type, flags, raw_data, aufs_fill_super, mnt);
+	err = get_sb_nodev(fs_type, flags, raw_data, aufs_fill_super, mnt);
+	if (!err)
+		stosi(mnt->mnt_sb)->si_mnt = mnt;
+	return err;
 }
 #else
 static struct super_block *aufs_get_sb(struct file_system_type *fs_type,

@@ -16,23 +16,29 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: aufs_type.h,v 1.40 2007/02/19 03:30:28 sfjro Exp $ */
+/* $Id: aufs_type.h,v 1.45 2007/03/20 07:31:02 sfjro Exp $ */
 
 #ifndef __AUFS_TYPE_H__
 #define __AUFS_TYPE_H__
 
-#define AUFS_VERSION	"20070219"
+#define AUFS_VERSION	"20070320"
 
 /* ---------------------------------------------------------------------- */
 
-#ifdef CONFIG_AUFS_BRANCH_MAX_CHAR
+#ifdef CONFIG_AUFS_BRANCH_MAX_127
 typedef char aufs_bindex_t;
-#define AUFS_BRANCH_MAX 0x7f
-#elif defined(CONFIG_AUFS_BRANCH_MAX_SHORT)
-typedef short aufs_bindex_t;
-#define AUFS_BRANCH_MAX 0x7fff
+#define AUFS_BRANCH_MAX 127
 #else
-#error unknown CONFIG_AUFS_BRANCH_MAX
+typedef short aufs_bindex_t;
+#ifdef CONFIG_AUFS_BRANCH_MAX_511
+#define AUFS_BRANCH_MAX 511
+#elif defined(CONFIG_AUFS_BRANCH_MAX_1023)
+#define AUFS_BRANCH_MAX 1023
+#elif defined(CONFIG_AUFS_BRANCH_MAX_32767)
+#define AUFS_BRANCH_MAX 32767
+#else
+#error unknown CONFIG_AUFS_BRANCH_MAX value
+#endif
 #endif
 
 #define AUFS_NAME		"aufs"

@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: f_op.c,v 1.17 2007/02/19 03:27:11 sfjro Exp $ */
+/* $Id: f_op.c,v 1.20 2007/03/19 04:31:31 sfjro Exp $ */
 
 #include <linux/fsnotify.h>
 #include <linux/pagemap.h>
@@ -41,8 +41,10 @@ int aufs_flush(struct file *file)
 	dentry = file->f_dentry;
 	LKTRTrace("%.*s\n", DLNPair(dentry));
 
-	aufs_read_lock(dentry, !AUFS_I_RLOCK);
+	// aufs_read_lock_file()
+	si_read_lock(dentry->d_sb);
 	fi_read_lock(file);
+	di_read_lock_child(dentry, !AUFS_I_RLOCK);
 
 	err = 0;
 	bend = fbend(file);
@@ -54,8 +56,9 @@ int aufs_flush(struct file *file)
 			err = hidden_file->f_op->flush(FlushArgs);
 	}
 
+	di_read_unlock(dentry, !AUFS_I_RLOCK);
 	fi_read_unlock(file);
-	aufs_read_unlock(dentry, !AUFS_I_RLOCK);
+	si_read_unlock(dentry->d_sb);
 	TraceErr(err);
 	return err;
 }
@@ -104,13 +107,13 @@ static int do_open_nondir(struct file *file, int flags)
 
 static int aufs_open_nondir(struct inode *inode, struct file *file)
 {
-	return do_open(inode, file, do_open_nondir);
+	return au_do_open(inode, file, do_open_nondir);
 }
 
 static int aufs_release_nondir(struct inode *inode, struct file *file)
 {
 	LKTRTrace("i%lu, %.*s\n", inode->i_ino, DLNPair(file->f_dentry));
-	fin_finfo(file);
+	au_fin_finfo(file);
 	return 0;
 }
 
@@ -124,35 +127,34 @@ static ssize_t aufs_read(struct file *file, char __user *buf, size_t count,
 	struct file *hidden_file;
 	struct super_block *sb;
 	struct inode *h_inode;
-	struct aufs_h_ipriv ipriv;
+	int dlgt;
 
 	dentry = file->f_dentry;
 	LKTRTrace("%.*s, cnt %d, pos %Ld\n", DLNPair(dentry), count, *ppos);
 
 	sb = dentry->d_sb;
 	si_read_lock(sb);
-	err = reval_and_lock_finfo(file, reopen_nondir, /*wlock*/0,
-				   /*locked*/0);
+	err = au_reval_and_lock_finfo(file, au_reopen_nondir, /*wlock*/0,
+				      /*locked*/0);
 	//if (LktrCond) {fi_read_unlock(file); err = -1;}
 	if (unlikely(err))
 		goto out;
 
 	/* support LSM and notify */
+	dlgt = need_dlgt(sb);
 	hidden_file = h_fptr(file);
 	h_inode = hidden_file->f_dentry->d_inode;
-	h_ipriv(h_inode, &ipriv, sb, /*do_lock*/1);
 	// todo: stop inotify? really?
 	if (1 || !IS_MS(sb, MS_UDBA_INOTIFY))
-		err = vfs_read(hidden_file, buf, count, ppos);
+		err = vfsub_read_u(hidden_file, buf, count, ppos, dlgt);
 	else {
 		struct inode *dir = dentry->d_parent->d_inode,
 			*h_dir = hidden_file->f_dentry->d_parent->d_inode;
 		aufs_bindex_t bstart = fbstart(file);
-		hdir_lock(h_dir, dir, bstart, NULL);
-		err = vfs_read(hidden_file, buf, count, ppos);
-		hdir_unlock(h_dir, dir, bstart, NULL);
+		hdir_lock(h_dir, dir, bstart);
+		err = vfsub_read_u(hidden_file, buf, count, ppos, dlgt);
+		hdir_unlock(h_dir, dir, bstart);
 	}
-	h_iunpriv(&ipriv, /*do_lock*/1);
 	memcpy(&file->f_ra, &hidden_file->f_ra, sizeof(file->f_ra)); //??
 	dentry->d_inode->i_atime = hidden_file->f_dentry->d_inode->i_atime;
 
@@ -173,7 +175,7 @@ static ssize_t aufs_write(struct file *file, const char __user *__buf,
 	struct file *hidden_file;
 	char __user *buf = (char __user*)__buf;
 	struct inode *h_inode;
-	struct aufs_h_ipriv ipriv;
+	int dlgt;
 
 	dentry = file->f_dentry;
 	LKTRTrace("%.*s, cnt %d, pos %Ld\n", DLNPair(dentry), count, *ppos);
@@ -182,34 +184,33 @@ static ssize_t aufs_write(struct file *file, const char __user *__buf,
 	i_lock(inode);
 	sb = dentry->d_sb;
 	si_read_lock(sb);
-	err = reval_and_lock_finfo(file, reopen_nondir, /*wlock*/1,
-				   /*locked*/1);
+	err = au_reval_and_lock_finfo(file, au_reopen_nondir, /*wlock*/1,
+				      /*locked*/1);
 	//if (LktrCond) {fi_write_unlock(file); err = -1;}
 	if (unlikely(err))
 		goto out;
-	err = ready_to_write(file, -1);
+	err = au_ready_to_write(file, -1);
 	//if (LktrCond) err = -1;
 	if (unlikely(err))
 		goto out_unlock;
 
 	/* support LSM and notify */
+	dlgt = need_dlgt(sb);
 	hidden_file = h_fptr(file);
 	h_inode = hidden_file->f_dentry->d_inode;
-	h_ipriv(h_inode, &ipriv, sb, /*do_lock*/1);
 	// todo: stop inotify? really?
-	if (!IS_MS(sb, MS_UDBA_INOTIFY))
-		err = vfs_write(hidden_file, buf, count, ppos);
-	else {
+	if (!IS_MS(sb, MS_UDBA_INOTIFY)) {
+		err = vfsub_write_u(hidden_file, buf, count, ppos, dlgt);
+	} else {
 		struct inode *dir = dentry->d_parent->d_inode,
 			*h_dir = hidden_file->f_dentry->d_parent->d_inode;
 		aufs_bindex_t bstart = fbstart(file);
-		hdir_lock(h_dir, dir, bstart, NULL);
-		err = vfs_write(hidden_file, buf, count, ppos);
-		hdir_unlock(h_dir, dir, bstart, NULL);
+		hdir_lock(h_dir, dir, bstart);
+		err = vfsub_write_u(hidden_file, buf, count, ppos, dlgt);
+		hdir_unlock(h_dir, dir, bstart);
 	}
-	h_iunpriv(&ipriv, /*do_lock*/1);
-	ii_write_lock(inode);
-	cpup_attr_timesizes(inode);
+	ii_write_lock_child(inode);
+	au_cpup_attr_timesizes(inode);
 	ii_write_unlock(inode);
 
  out_unlock:
@@ -223,7 +224,7 @@ static ssize_t aufs_write(struct file *file, const char __user *__buf,
 
 /* ---------------------------------------------------------------------- */
 
-#if 0 //def CONFIG_AUFS_NEST
+#if 0 //def CONFIG_AUFS_AS_BRANCH
 struct lvma {
 	struct list_head list;
 	struct vm_area_struct *vma;
@@ -254,8 +255,7 @@ static struct file *safe_file(struct vm_area_struct *vma)
 		if (lvma) {
 			lvma->vma = vma;
 			list_add(&lvma->list, &sbinfo->si_lvma);
-		}
-		else {
+		} else {
 			warn = 1;
 			file = NULL;
 		}
@@ -310,7 +310,7 @@ static void reset_file(struct vm_area_struct *vma, struct file *file)
 	vma->vm_file = file;
 	smp_mb();
 }
-#endif /* CONFIG_AUFS_NEST */
+#endif /* CONFIG_AUFS_AS_BRANCH */
 
 static struct page *aufs_nopage(struct vm_area_struct *vma, unsigned long addr,
 				int *type)
@@ -399,14 +399,14 @@ static int aufs_mmap(struct file *file, struct vm_area_struct *vma)
 
 	sb = dentry->d_sb;
 	si_read_lock(sb);
-	err = reval_and_lock_finfo(file, reopen_nondir,
-				   wlock | !mmapped, /*locked*/0);
+	err = au_reval_and_lock_finfo(file, au_reopen_nondir,
+				      wlock | !mmapped, /*locked*/0);
 	//err = -1;
 	if (unlikely(err))
 		goto out;
 
 	if (wlock) {
-		err = ready_to_write(file, -1);
+		err = au_ready_to_write(file, -1);
 		//err = -1;
 		if (unlikely(err))
 			goto out_unlock;
@@ -472,8 +472,8 @@ static ssize_t aufs_sendfile(struct file *file, loff_t *ppos,
 
 	sb = dentry->d_sb;
 	si_read_lock(sb);
-	err = reval_and_lock_finfo(file, reopen_nondir, /*wlock*/0,
-				   /*locked*/0);
+	err = au_reval_and_lock_finfo(file, au_reopen_nondir, /*wlock*/0,
+				      /*locked*/0);
 	if (unlikely(err))
 		goto out;
 
@@ -518,8 +518,8 @@ static unsigned int aufs_poll(struct file *file, poll_table *wait)
 	mask = POLLERR /* | POLLIN | POLLOUT */;
 	sb = dentry->d_sb;
 	si_read_lock(sb);
-	err = reval_and_lock_finfo(file, reopen_nondir, /*wlock*/0,
-				   /*locked*/0);
+	err = au_reval_and_lock_finfo(file, au_reopen_nondir, /*wlock*/0,
+				      /*locked*/0);
 	//err = -1;
 	if (unlikely(err))
 		goto out;
@@ -559,12 +559,12 @@ static int aufs_fsync_nondir(struct file *file, struct dentry *dentry,
 	err = 0; //-EBADF;
 	if (unlikely(!(file->f_mode & FMODE_WRITE)))
 		goto out;
-	err = reval_and_lock_finfo(file, reopen_nondir, /*wlock*/1,
-				   /*locked*/1);
+	err = au_reval_and_lock_finfo(file, au_reopen_nondir, /*wlock*/1,
+				      /*locked*/1);
 	//err = -1;
 	if (unlikely(err))
 		goto out;
-	err = ready_to_write(file, -1);
+	err = au_ready_to_write(file, -1);
 	//err = -1;
 	if (unlikely(err))
 		goto out_unlock;
@@ -572,14 +572,14 @@ static int aufs_fsync_nondir(struct file *file, struct dentry *dentry,
 	err = -EINVAL;
 	hidden_file = h_fptr(file);
 	if (hidden_file->f_op && hidden_file->f_op->fsync) {
-		// priv?
+		// todo: apparmor thread?
 		//file->f_mapping->host->i_mutex
-		ii_write_lock(inode);
-		i_lock(hidden_file->f_dentry->d_inode);
+		ii_write_lock_child(inode);
+		hi_lock_child(hidden_file->f_dentry->d_inode);
 		err = hidden_file->f_op->fsync
 			(hidden_file, hidden_file->f_dentry, datasync);
 		//err = -1;
-		cpup_attr_timesizes(inode);
+		au_cpup_attr_timesizes(inode);
 		i_unlock(hidden_file->f_dentry->d_inode);
 		ii_write_unlock(inode);
 	}
@@ -604,8 +604,8 @@ static int aufs_fasync(int fd, struct file *file, int flag)
 
 	sb = dentry->d_sb;
 	si_read_lock(sb);
-	err = reval_and_lock_finfo(file, reopen_nondir, /*wlock*/0,
-				   /*locked*/0);
+	err = au_reval_and_lock_finfo(file, au_reopen_nondir, /*wlock*/0,
+				      /*locked*/0);
 	//err = -1;
 	if (unlikely(err))
 		goto out;

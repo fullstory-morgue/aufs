@@ -16,7 +16,7 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
-# $Id: unionctl,v 1.18 2007/02/19 03:26:18 sfjro Exp $
+# $Id: unionctl,v 1.21 2007/03/12 01:54:26 sfjro Exp $
 
 # simple script for controling aufs.
 # compatible with unionctl(8) in unionfs(5).
@@ -73,6 +73,7 @@ branches()
 
 test $# -lt 2 && eecho "${me}: bad arg $@" && exit 1
 f=/proc/mounts
+#f=/sys/fs/aufs/brs
 test ! -f $f && eecho "${me}: $f is necessary" && exit 1
 
 set -e
@@ -85,11 +86,22 @@ cd "$OLDPWD"
 action="$2"
 shift 2
 
-tgt=`grep -w "$e_mntpnt aufs" $f | tail -1 | rev | cut -f3- -d' ' | rev`
+brs=/sys/fs/aufs/brs
+if [ -r $brs ]
+then
+dev=`grep " $e_mntpnt " $brs | tail -n 1 | cut -f1 -d' '`
+test ! "$dev" && eecho "illegal mount-point $mntpnt" && exit 1
+br=`grep " $e_mntpnt " $brs | tail -n 1 | cut -f4 -d' '`
+test -w $brs && >> $brs
+test ! "$br" && eecho "illegal branches $br" && exit 1
+echo "$br" | cut -f2- -d: | tr ':=' '\n ' > $tmp
+else
+tgt=`grep " $e_mntpnt aufs" $f | tail -n 1 | rev | cut -f3- -d' ' | rev`
 test "$tgt" = "" && eecho "${me}: no such mntpnt $mntpnt" && exit 1
 dev=`echo "$tgt" | sed -e 's: '"$mntpnt aufs"' .*$::'`
 branches > $tmp
-#cat $tmp | while read i; do echo $i; done; exit
+fi
+#cat $tmp | while read i; do echo "$i"; done; #exit
 
 find_bindex() # dir
 {
@@ -129,7 +141,6 @@ do_add()
 	do
 		case "$1" in
 		--before)	bindex=`find_bindex "$2"`
-				bindex=`expr $bindex - 1` || :
 				;;
 		--after)	bindex=`find_bindex "$2"`
 				bindex=`expr $bindex + 1` || :

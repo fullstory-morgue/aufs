@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: vdir.c,v 1.13 2007/02/19 03:29:45 sfjro Exp $ */
+/* $Id: vdir.c,v 1.16 2007/03/19 04:32:35 sfjro Exp $ */
 
 #include "aufs.h"
 
@@ -434,7 +434,7 @@ static int fillvdir(void *__arg, const char *__name, int namelen, loff_t offset,
 
 static int read_vdir(struct file *file, int may_read)
 {
-	int err, do_read;
+	int err, do_read, dlgt;
 	struct dentry *dentry;
 	struct inode *inode;
 	struct aufs_vdir *vdir, *allocated;
@@ -496,32 +496,29 @@ static int read_vdir(struct file *file, int may_read)
 		init_nhash(arg.whlist + bindex);
 	}
 
+	dlgt = need_dlgt(sb);
 	arg.file = file;
 	arg.vdir = vdir;
 	bstart = fbstart(file);
 	for (bindex = bstart; !err && bindex <= bend; bindex++) {
 		struct file *hf;
 		struct inode *h_inode;
-		struct aufs_h_ipriv ipriv;
 
 		hf = h_fptr_i(file, bindex);
 		if (!hf)
 			continue;
 
-		/* what i want to do is only set PRIVATE temporary */
 		h_inode = hf->f_dentry->d_inode;
-		h_ipriv(h_inode, &ipriv, sb, /*do_lock*/1);
 		//hf->f_pos = 0;
 		arg.bindex = bindex;
 		do {
 			arg.err = 0;
 			arg.called = 0;
 			//smp_mb();
-			err = vfs_readdir(hf, fillvdir, &arg);
+			err = vfsub_readdir(hf, fillvdir, &arg, dlgt);
 			if (err >= 0)
 				err = arg.err;
 		} while (!err && arg.called);
-		h_iunpriv(&ipriv, /*do_lock*/1);
 	}
 
 	for (bindex = bstart; bindex <= bend; bindex++) {
@@ -594,7 +591,7 @@ static int copy_vdir(struct aufs_vdir *tgt, struct aufs_vdir *src)
 	return err;
 }
 
-int init_vdir(struct file *file)
+int au_init_vdir(struct file *file)
 {
 	int err;
 	struct dentry *dentry;
@@ -713,7 +710,7 @@ static int seek_vdir(struct file *file)
 	return valid;
 }
 
-int fill_de(struct file *file, void *dirent, filldir_t filldir)
+int au_fill_de(struct file *file, void *dirent, filldir_t filldir)
 {
 	int err, l;
 	struct dentry *dentry;

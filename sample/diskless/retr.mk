@@ -17,10 +17,10 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
-# $Id: retr.mk,v 1.2 2007/01/08 01:59:11 sfjro Exp $
+# $Id: retr.mk,v 1.3 2007/03/12 01:54:56 sfjro Exp $
 
 # call me from main Makefile.
-# retrieves all neccessary debian packages to ${DebPkgDir}.
+# retrieves all necessary debian packages to ${DebPkgDir}.
 # parsing debian installer, get $required and $base package names.
 
 all:

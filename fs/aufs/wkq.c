@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: wkq.c,v 1.6 2007/02/05 01:44:26 sfjro Exp $ */
+/* $Id: wkq.c,v 1.7 2007/03/19 04:32:35 sfjro Exp $ */
 
 /*
  * Occasionally aufs needs to get superuser privilege to access branches,
@@ -48,13 +48,64 @@
 static struct workqueue_struct **wkq;
 static atomic_t wkq_last = ATOMIC_INIT(0);
 
+struct aufs_cred {
+	uid_t fsuid;
+	//gid_t fsgid;
+	kernel_cap_t cap_effective, cap_inheritable, cap_permitted;
+	//unsigned keep_capabilities:1;
+	//struct user_struct *user;
+	//struct fs_struct *fs;
+	//struct nsproxy *nsproxy;
+
+};
+
+struct aufs_wkinfo {
+	struct completion comp;
+	struct work_struct wk;
+	aufs_wkq_func_t func;
+	void *args;
+	int dlgt; // can be a bit
+	struct aufs_cred cred;
+};
+
+/* ---------------------------------------------------------------------- */
+
+#ifdef CONFIG_AUFS_DLGT
+static void cred_store(struct aufs_cred *cred)
+{
+	cred->fsuid = current->fsuid;
+	cred->cap_effective = current->cap_effective;
+	cred->cap_inheritable = current->cap_inheritable;
+	cred->cap_permitted = current->cap_permitted;
+}
+
+static void cred_revert(struct aufs_cred *cred)
+{
+	DEBUG_ON(!is_kthread(current));
+	current->fsuid = cred->fsuid;
+	current->cap_effective = cred->cap_effective;
+	current->cap_inheritable = cred->cap_inheritable;
+	current->cap_permitted = cred->cap_permitted;
+}
+
+static void cred_switch(struct aufs_cred *old, struct aufs_cred *new)
+{
+	cred_store(old);
+	cred_revert(new);
+}
+#endif
+
+/* ---------------------------------------------------------------------- */
+
 static void do_wkq(struct work_struct *wk)
 {
 	unsigned int idx;
 
 	TraceEnter();
 
+	// todo: busy thread bitmap and find_first_bit()
 	// lazy round-robin
+	//smp_mb();
 	while (1) {
 		idx = atomic_inc_return(&wkq_last);
 		idx %= aufs_nwkq;
@@ -67,27 +118,44 @@ static void do_wkq(struct work_struct *wk)
 static AufsWkqFunc(wkq_func, wk)
 {
 	struct aufs_wkinfo *wkinfo = container_of(wk, struct aufs_wkinfo, wk);
+
+#ifdef CONFIG_AUFS_DLGT
+	if (!wkinfo->dlgt)
+		wkinfo->func(wkinfo->args);
+	else {
+		struct aufs_cred cred;
+		cred_switch(&cred, &wkinfo->cred);
+		wkinfo->func(wkinfo->args);
+		cred_revert(&cred);
+	}
+#else
 	wkinfo->func(wkinfo->args);
+#endif
 	complete(&wkinfo->comp);
 }
 
-void wkq_wait(aufs_wkq_func_t func, void *args)
+void wkq_wait(aufs_wkq_func_t func, void *args, int dlgt)
 {
 	struct aufs_wkinfo wkinfo = {
 		.func	= func,
 		.args	= args,
+		.dlgt	= dlgt
 	};
 
-	TraceEnter();
-	DEBUG_ON(is_kthread(current) && !strcmp(current->comm, AUFS_WKQ_NAME));
+	LKTRTrace("dlgt %d\n", dlgt);
+	DEBUG_ON(is_kthread(current));
 
 	AufsInitWkq(&wkinfo.wk, wkq_func);
 	init_completion(&wkinfo.comp);
+#ifdef CONFIG_AUFS_DLGT
+	if (dlgt)
+		cred_store(&wkinfo.cred);
+#endif
 	do_wkq(&wkinfo.wk);
 	wait_for_completion(&wkinfo.comp);
 }
 
-void fin_wkq(void)
+void au_fin_wkq(void)
 {
 	int i;
 
@@ -99,7 +167,7 @@ void fin_wkq(void)
 	kfree(wkq);
 }
 
-int __init init_wkq(void)
+int __init au_init_wkq(void)
 {
 	int err, i;
 
@@ -117,7 +185,7 @@ int __init init_wkq(void)
 			continue;
 
 		err = PTR_ERR(wkq[i]);
-		fin_wkq();
+		au_fin_wkq();
 		break;
 	}
 

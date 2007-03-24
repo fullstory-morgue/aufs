@@ -16,7 +16,7 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
-# $Id: mount.aufs,v 1.11 2007/01/15 04:58:23 sfjro Exp $
+# $Id: mount.aufs,v 1.14 2007/03/12 01:54:26 sfjro Exp $
 
 #
 # The main purpose of this script is updating /etc/mtab and calling auplilnk.
@@ -69,21 +69,28 @@ test "$1" = "-v" && verbose=1 && shift
 test "$1" = "-o" || { eecho Bad arg. "$@"; exit 1; }
 shift
 
-f=/proc/mounts
+brs=/sys/fs/aufs/brs
+for f in /proc/mounts #$brs
+do
 test \( $do_update -eq 1 -o $verbose -eq 1 \) -a ! -r $f &&
 eecho ${f}: Permission denied. &&
 exit 1
+done
+
 f=/etc/mtab
 test ! -r $f -o \( $do_update -eq 1 -a ! -w $f \) &&
 eecho ${f}: Permission denied &&
 exit 1
 
-oldmtab=`grep "^$e_dev $e_mntpnt $fstype" $f | tail -1`
+oldmtab=`grep "^$e_dev $e_mntpnt $fstype" $f | tail -n 1`
 echo "$oldmtab" |
 sed -e '
 s:^'"$dev $mntpnt $fstype"' ::
 s/\( [0-9]*\)\{2\}$//
 ' | tr ',' '\n' > $tmp.old_opt
+test -r $brs &&
+grep "^$e_dev $e_mntpnt " $brs | tail -n 1 | cut -f4- -d' ' >> $tmp.old_opt
+test -w $brs && >> $brs
 #cat $tmp.old_opt; rm -f $tmp $tmp.*; exit
 
 echo "$@" | tr ',' '\n' > $tmp.new_opt
@@ -131,7 +138,7 @@ failure()
 
 newmtab=`{ grep "^$e_dev $e_mntpnt $fstype" /proc/mounts ||
 	failure "bad /proc/mounts"; } |
-	tail -1 | sed -e 's:^'"$e_dev $e_mntpnt $fstype"' ::'`
+	tail -n 1 | sed -e 's:^'"$e_dev $e_mntpnt $fstype"' ::'`
 digits=`echo "$newmtab" | rev | cut -f-2 -d' ' | rev`
 newmtab=`echo "$newmtab" | rev | cut -f3- -d' ' | rev | conv escape`
 newmtab="$e_dev $e_mntpnt $fstype $newmtab $digits"
@@ -171,6 +178,10 @@ mv $f /etc/mtab || failure "renaming from $f"
 rm $lock || failure "removing lockfile"
 fi
 
-test $verbose -eq 1 &&
+if [ $verbose -eq 1 ]
+then
 echo "$dev" on "$mntpnt" type "$fstype" \(`echo "$newmtab" | cut -f4 -d' '`\)
+#grep "^$e_dev $e_mntpnt " $brs | tail -n 1 | cut -f4- -d' '
+test -w $brs && >> $brs
+fi
 exit $err

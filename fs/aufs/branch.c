@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: branch.c,v 1.39 2007/02/19 03:25:45 sfjro Exp $ */
+/* $Id: branch.c,v 1.42 2007/03/19 04:29:53 sfjro Exp $ */
 
 //#include <linux/fs.h>
 //#include <linux/namei.h>
@@ -52,9 +52,9 @@ void free_branches(struct aufs_sbinfo *sbinfo)
 }
 
 /*
- * find the index of a branch which is specified by @id.
+ * find the index of a branch which is specified by @br_id.
  */
-int find_brindex(struct super_block *sb, unsigned int id)
+int find_brindex(struct super_block *sb, aufs_bindex_t br_id)
 {
 	aufs_bindex_t bindex, bend;
 
@@ -62,7 +62,7 @@ int find_brindex(struct super_block *sb, unsigned int id)
 
 	bend = sbend(sb);
 	for (bindex = 0; bindex <= bend; bindex++)
-		if (stobr(sb, bindex)->br_id == id)
+		if (sbr_id(sb, bindex) == br_id)
 			return bindex;
 	return -1;
 }
@@ -102,7 +102,7 @@ static int find_rw_parent(struct dentry *dentry, aufs_bindex_t bend)
 #if 0 // branch policy
 			if (candidate == -1)
 				candidate = bindex;
-			if (!test_perm(hidden_parent->d_inode, MAY_WRITE))
+			if (!au_test_perm(hidden_parent->d_inode, MAY_WRITE))
 #endif
 				return bindex;
 		}
@@ -287,7 +287,7 @@ static int test_add(struct super_block *sb, struct opt_add *add, int remount)
 	LKTRTrace("%s, remo%d\n", add->path, remount);
 
 	root = sb->s_root;
-	if (unlikely(find_dbindex(root, add->nd.dentry) != -1)) {
+	if (unlikely(au_find_dbindex(root, add->nd.dentry) != -1)) {
 		err = 1;
 		if (!remount) {
 			err = -EINVAL;
@@ -299,7 +299,8 @@ static int test_add(struct super_block *sb, struct opt_add *add, int remount)
 	err = -ENOSPC;
 	bend = sbend(sb);
 	//if (LktrCond) bend = AUFS_BRANCH_MAX;
-	if (unlikely(AUFS_BRANCH_MAX <= bend)) {
+	if (unlikely(AUFS_BRANCH_MAX <= add->bindex
+		    || AUFS_BRANCH_MAX - 1 <= bend)) {
 		Err("number of branches exceeded %s\n", add->path);
 		goto out;
 	}
@@ -310,16 +311,11 @@ static int test_add(struct super_block *sb, struct opt_add *add, int remount)
 		goto out;
 	}
 
-	err = -ENOENT;
 	inode = add->nd.dentry->d_inode;
-	if (unlikely(!inode || !inode->i_nlink)) {
+	DEBUG_ON(!inode || !S_ISDIR(inode->i_mode));
+	err = -ENOENT;
+	if (unlikely(!inode->i_nlink)) {
 		Err("no existence %s\n", add->path);
-		goto out;
-	}
-
-	err = -ENOTDIR;
-	if (unlikely(!S_ISDIR(inode->i_mode))) {
-		Err("not dir %s\n", add->path);
 		goto out;
 	}
 
@@ -329,7 +325,7 @@ static int test_add(struct super_block *sb, struct opt_add *add, int remount)
 		goto out;
 	}
 
-#if 1 //ndef CONFIG_AUFS_NEST
+#if 1 //ndef CONFIG_AUFS_AS_BRANCH
 	if (unlikely(SB_AUFS(inode->i_sb)
 		     || !strcmp(sbtype(inode->i_sb), "unionfs"))) {
 		Err("nested " AUFS_NAME " %s\n", add->path);
@@ -421,15 +417,14 @@ int br_add(struct super_block *sb, struct opt_add *add, int remount)
 		rw_init_nolock(&add_branch->br_wh_rwsem);
 		add_branch->br_wh = NULL;
 	} else {
-		struct aufs_h_ipriv ipriv;
-		i_lock_priv(add->nd.dentry->d_inode, &ipriv, sb);
-		rw_init_wlock(&add_branch->br_wh_rwsem);
+		hi_lock_parent(add->nd.dentry->d_inode);
+		rw_init_wlock(&add_branch->br_wh_rwsem, AUFS_LSC_BR_WH);
 		err = init_wh(add->nd.dentry, add_branch,
-			      SB_NFS(add->nd.mnt->mnt_sb) ? add->nd.mnt : NULL);
+			      do_mnt_nfs(add->nd.mnt));
 		//if (LktrCond)
 		//{dput(add_branch->br_wh); add_branch->br_wh = NULL; err = -1;}
 		br_wh_write_unlock(add_branch);
-		i_unlock_priv(add->nd.dentry->d_inode, &ipriv);
+		i_unlock(add->nd.dentry->d_inode);
 		if (unlikely(err)) {
 			rw_destroy(&add_branch->br_wh_rwsem);
 			kfree(add_branch);
@@ -473,13 +468,13 @@ int br_add(struct super_block *sb, struct opt_add *add, int remount)
 	set_h_dptr(root, add_bindex, dget(add->nd.dentry));
 	set_h_iptr(root_inode, add_bindex, igrab(add->nd.dentry->d_inode), 0);
 	if (!add_bindex)
-		cpup_attr_all(root_inode);
+		au_cpup_attr_all(root_inode);
 	else
-		add_nlink(root_inode, add->nd.dentry->d_inode);
+		au_add_nlink(root_inode, add->nd.dentry->d_inode);
 	maxb = add->nd.dentry->d_sb->s_maxbytes;
 	if (sb->s_maxbytes < maxb)
 		sb->s_maxbytes = maxb;
-	sigen_inc(sb);
+	au_sigen_inc(sb);
 
 	if (IS_MS(sb, MS_XINO)) {
 		struct file *base_file = stobr(sb, 0)->br_xino;
@@ -512,6 +507,10 @@ static int test_children(struct dentry *root, aufs_bindex_t bindex)
 
 	LKTRTrace("b%d\n", bindex);
 	SiMustWriteLock(root->d_sb);
+	DiMustWriteLock(root);
+	DiMustNoWaiters(root);
+	IiMustNoWaiters(root->d_inode);
+	di_write_unlock(root);
 
 	//spin_lock(&dcache_lock);
  repeat:
@@ -519,11 +518,10 @@ static int test_children(struct dentry *root, aufs_bindex_t bindex)
  resume:
 	while (next != &this_parent->d_subdirs) {
 		struct list_head *tmp = next;
-		struct dentry *dentry
-			= list_entry(tmp, struct dentry, D_CHILD);
+		struct dentry *dentry = list_entry(tmp, struct dentry, D_CHILD);
 
 		next = tmp->next;
-		di_read_lock(dentry, AUFS_I_RLOCK);
+		di_read_lock_child(dentry, AUFS_I_RLOCK);
 		if (!h_dptr_i(dentry, bindex)
 		    || d_unhashed(dentry)
 		    || !dentry->d_inode) {
@@ -549,7 +547,7 @@ static int test_children(struct dentry *root, aufs_bindex_t bindex)
 	}
 	if (this_parent != root) {
 		next = this_parent->D_CHILD.next;
-		di_read_lock(this_parent, AUFS_I_RLOCK);
+		di_read_lock_child(this_parent, AUFS_I_RLOCK);
 		//atomic_dec(&this_parent->d_count);
 		if (unlikely(h_dptr_i(this_parent, bindex)
 			     && atomic_read(&this_parent->d_count)
@@ -567,6 +565,7 @@ static int test_children(struct dentry *root, aufs_bindex_t bindex)
 	}
 
  out:
+	di_write_lock_child(root); /* aufs_write_lock() calls ..._child() */
 	//spin_unlock(&dcache_lock);
 	TraceErr(ret);
 	return ret;
@@ -582,7 +581,7 @@ int br_del(struct super_block *sb, struct opt_del *del, int remount)
 	struct aufs_dinfo *dinfo;
 	struct aufs_iinfo *iinfo;
 	struct aufs_branch *br;
-	unsigned int id;
+	aufs_bindex_t br_id;
 
 	LKTRTrace("%s, %.*s\n", del->path, DLNPair(del->h_root));
 	SiMustWriteLock(sb);
@@ -591,7 +590,7 @@ int br_del(struct super_block *sb, struct opt_del *del, int remount)
 	inode = root->d_inode;
 	IiMustWriteLock(inode);
 
-	bindex = find_dbindex(root, del->h_root);
+	bindex = au_find_dbindex(root, del->h_root);
 	if (unlikely(bindex < 0)) {
 		if (remount)
 			return 0; /* success */
@@ -633,7 +632,7 @@ int br_del(struct super_block *sb, struct opt_del *del, int remount)
 
 	dput(h_dptr_i(root, bindex));
 	aufs_hiput(iinfo->ii_hinode + bindex);
-	id = br->br_id;
+	br_id = br->br_id;
 	free_branch(br);
 
 	//todo: realloc and shrink memeory
@@ -658,13 +657,13 @@ int br_del(struct super_block *sb, struct opt_del *del, int remount)
 	sbinfo->si_bend--;
 	dinfo->di_bend--;
 	iinfo->ii_bend--;
-	sigen_inc(sb);
+	au_sigen_inc(sb);
 	if (!bindex)
-		cpup_attr_all(inode);
+		au_cpup_attr_all(inode);
 	else
-		sub_nlink(inode, del->h_root->d_inode);
+		au_sub_nlink(inode, del->h_root->d_inode);
 	if (IS_MS(sb, MS_PLINK))
-		half_refresh_plink(sb, id);
+		half_refresh_plink(sb, br_id);
 
 	if (sb->s_maxbytes == del->h_root->d_sb->s_maxbytes) {
 		bend--;
@@ -683,13 +682,11 @@ int br_del(struct super_block *sb, struct opt_del *del, int remount)
 	hidden_dir = del->h_root->d_inode;
 	if (hidden_dir->i_op && hidden_dir->i_op->link) {
 		struct inode *dir = sb->s_root->d_inode;
-		struct aufs_h_ipriv ipriv;
-
-		hdir_lock(hidden_dir, dir, bindex, &ipriv);
+		hdir_lock(hidden_dir, dir, bindex);
 		br_wh_write_lock(br);
-		rerr = init_wh(del->h_root, br, br->br_mnt);
+		rerr = init_wh(del->h_root, br, do_mnt_nfs(br->br_mnt));
 		br_wh_write_unlock(br);
-		hdir_unlock(hidden_dir, dir, bindex, &ipriv);
+		hdir_unlock(hidden_dir, dir, bindex);
 		if (rerr)
 			Warn("failed re-creating base whiteout, %s. (%d)\n",
 			     del->path, rerr);
@@ -714,7 +711,7 @@ int br_mod(struct super_block *sb, struct opt_mod *mod, int remount)
 	DiMustWriteLock(root);
 	IiMustWriteLock(root->d_inode);
 
-	bindex = find_dbindex(root, mod->h_root);
+	bindex = au_find_dbindex(root, mod->h_root);
 	if (unlikely(bindex < 0)) {
 		if (remount)
 			return 0; /* success */
@@ -747,9 +744,14 @@ int br_mod(struct super_block *sb, struct opt_mod *mod, int remount)
 				br->br_plink = NULL;
 			}
 #if 1 // test here
+			DiMustNoWaiters(root);
+			IiMustNoWaiters(root->d_inode);
+			di_write_unlock(root);
+
 			// no need file_list_lock() since sbinfo is locked
 			list_for_each_entry(file, &sb->s_files, f_u.fu_list) {
 				LKTRTrace("%.*s\n", DLNPair(file->f_dentry));
+				// lockdep:
 				fi_read_lock(file);
 				if (!S_ISREG(file->f_dentry->d_inode->i_mode)
 				    || !(file->f_mode & FMODE_WRITE)
@@ -760,29 +762,30 @@ int br_mod(struct super_block *sb, struct opt_mod *mod, int remount)
 
 				// todo: already flushed?
 				hf = h_fptr(file);
-				hf->f_flags = file_roflags(hf->f_flags);
+				hf->f_flags = au_file_roflags(hf->f_flags);
 				hf->f_mode &= ~FMODE_WRITE;
 				fi_read_unlock(file);
 			}
+
+			/* aufs_write_lock() calls ..._child() */
+			di_write_lock_child(root);
 #endif
 		}
 	} else if ((mod->perm & MAY_WRITE) && !br->br_wh
 		   && hidden_dir->i_op && hidden_dir->i_op->link) {
 		struct inode *dir = sb->s_root->d_inode;
-		struct aufs_h_ipriv ipriv;
-
-		hdir_lock(hidden_dir, dir, bindex, &ipriv);
+		hdir_lock(hidden_dir, dir, bindex);
 		br_wh_write_lock(br);
-		err = init_wh(mod->h_root, br, br->br_mnt);
+		err = init_wh(mod->h_root, br, do_mnt_nfs(br->br_mnt));
 		br_wh_write_unlock(br);
-		hdir_unlock(hidden_dir, dir, bindex, &ipriv);
+		hdir_unlock(hidden_dir, dir, bindex);
 		if (unlikely(err))
 			goto out;
 	}
 
 	br->br_perm = mod->perm;
 	// no need to inc?
-	//sigen_inc(sb);
+	//au_sigen_inc(sb);
 	return 0; /* success */
 
  out:

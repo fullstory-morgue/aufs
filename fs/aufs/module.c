@@ -16,10 +16,13 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: module.c,v 1.1 2007/02/19 03:32:08 sfjro Exp $ */
+/* $Id: module.c,v 1.5 2007/03/19 04:32:35 sfjro Exp $ */
 
 //#include <linux/init.h>
+//#include <linux/kobject.h>
 #include <linux/module.h>
+//#include <linux/seq_file.h>
+//#include <linux/sysfs.h>
 #include "aufs.h"
 
 /* ---------------------------------------------------------------------- */
@@ -27,7 +30,6 @@
 /*
  * aufs caches
  */
-
 struct kmem_cache *aufs_cachep[_AufsCacheLast];
 static int __init create_cache(void)
 {
@@ -58,10 +60,21 @@ static void __exit destroy_cache(void)
 
 /* ---------------------------------------------------------------------- */
 
+char esc_chars[0x20 + 3]; /* 0x01-0x20, backslash, del, and NULL */
+int au_dir_roflags;
+extern struct file_system_type aufs_fs_type;
+
+#ifdef DbgDlgt
+#include <linux/security.h>
+#include "dbg_dlgt.c"
+#else
+#define dbg_dlgt_init()	0
+#define dbg_dlgt_exit()	/* */
+#endif
+
 /*
  * functions for module interface.
  */
-
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Junjiro Okajima");
 MODULE_DESCRIPTION(AUFS_NAME " -- Another unionfs");
@@ -70,11 +83,15 @@ MODULE_VERSION(AUFS_VERSION);
 unsigned char aufs_nwkq = AUFS_NWKQ_DEF;
 MODULE_PARM_DESC(nwkq, "the number of workqueue thread, " AUFS_WKQ_NAME);
 module_param_named(nwkq, aufs_nwkq, byte, 0444);
-extern struct file_system_type aufs_fs_type;
+
+int sysaufs_brs = 0;
+MODULE_PARM_DESC(brs, "use <sysfs>/fs/aufs/brs");
+module_param_named(brs, sysaufs_brs, int, 0444);
 
 static int __init aufs_init(void)
 {
-	int err;
+	int err, i;
+	char *p;
 
 	//sbinfo->si_xino is atomic_long_t
 	BUILD_BUG_ON(sizeof(ino_t) != sizeof(long));
@@ -92,68 +109,67 @@ static int __init aufs_init(void)
 #if 0 // verbose debug
 	{
 		union {
-			struct aufs_branch br;
-			struct aufs_dinfo di;
-			struct aufs_finfo fi;
-			struct aufs_iinfo ii;
-			struct aufs_hinode hi;
-			struct aufs_sbinfo si;
-			struct aufs_destr destr;
-			struct aufs_de de;
-			struct aufs_wh wh;
-			struct aufs_vdir vd;
+			struct aufs_branch *br;
+			struct aufs_dinfo *di;
+			struct aufs_finfo *fi;
+			struct aufs_iinfo *ii;
+			struct aufs_hinode *hi;
+			struct aufs_sbinfo *si;
+			struct aufs_destr *destr;
+			struct aufs_de *de;
+			struct aufs_wh *wh;
+			struct aufs_vdir *vd;
 		} u;
 
 		printk("br{"
 		       "xino %d, readf %d, writef %d, "
-		       "id %d, perm %d, sb %d, mnt %d, count %d, "
+		       "id %d, perm %d, mnt %d, count %d, "
 		       "wh_sem %d, wh %d, run %d} %d\n",
-		       offsetof(typeof(u.br), br_xino),
-		       offsetof(typeof(u.br), br_xino_read),
-		       offsetof(typeof(u.br), br_xino_write),
-		       offsetof(typeof(u.br), br_id),
-		       offsetof(typeof(u.br), br_perm),
-		       offsetof(typeof(u.br), br_sb),
-		       offsetof(typeof(u.br), br_mnt),
-		       offsetof(typeof(u.br), br_count),
-		       offsetof(typeof(u.br), br_wh_rwsem),
-		       offsetof(typeof(u.br), br_wh),
-		       offsetof(typeof(u.br), br_wh_running),
-		       sizeof(u.br));
+		       offsetof(typeof(*u.br), br_xino),
+		       offsetof(typeof(*u.br), br_xino_read),
+		       offsetof(typeof(*u.br), br_xino_write),
+		       offsetof(typeof(*u.br), br_id),
+		       offsetof(typeof(*u.br), br_perm),
+		       offsetof(typeof(*u.br), br_mnt),
+		       offsetof(typeof(*u.br), br_count),
+		       offsetof(typeof(*u.br), br_wh_rwsem),
+		       offsetof(typeof(*u.br), br_wh),
+		       offsetof(typeof(*u.br), br_wh_running),
+		       sizeof(*u.br));
 		printk("di{gen %d, rwsem %d, bstart %d, bend %d, bwh %d, "
-		       "bdiropq %d, dentry %d, reval %d} %d\n",
-		       offsetof(typeof(u.di), di_generation),
-		       offsetof(typeof(u.di), di_rwsem),
-		       offsetof(typeof(u.di), di_bstart),
-		       offsetof(typeof(u.di), di_bend),
-		       offsetof(typeof(u.di), di_bwh),
-		       offsetof(typeof(u.di), di_bdiropq),
-		       offsetof(typeof(u.di), di_dentry),
-		       offsetof(typeof(u.di), di_reval),
-		       sizeof(u.di));
+		       "bdiropq %d, hdentry %d, reval %d} %d\n",
+		       offsetof(typeof(*u.di), di_generation),
+		       offsetof(typeof(*u.di), di_rwsem),
+		       offsetof(typeof(*u.di), di_bstart),
+		       offsetof(typeof(*u.di), di_bend),
+		       offsetof(typeof(*u.di), di_bwh),
+		       offsetof(typeof(*u.di), di_bdiropq),
+		       offsetof(typeof(*u.di), di_hdentry),
+		       offsetof(typeof(*u.di), di_reval),
+		       sizeof(*u.di));
 		printk("fi{gen %d, rwsem %d, hfile %d, bstart %d, bend %d, "
-		       "mapcnt %d, vm_ops %d, vdir_cach %d} %d\n",
-		       offsetof(typeof(u.fi), fi_generation),
-		       offsetof(typeof(u.fi), fi_rwsem),
-		       offsetof(typeof(u.fi), fi_hfile),
-		       offsetof(typeof(u.fi), fi_bstart),
-		       offsetof(typeof(u.fi), fi_bend),
-		       offsetof(typeof(u.fi), fi_hidden_vm_ops),
-		       offsetof(typeof(u.fi), fi_vdir_cache),
-		       sizeof(u.fi));
+		       "h_vm_ops %d, vdir_cach %d} %d\n",
+		       offsetof(typeof(*u.fi), fi_generation),
+		       offsetof(typeof(*u.fi), fi_rwsem),
+		       offsetof(typeof(*u.fi), fi_hfile),
+		       offsetof(typeof(*u.fi), fi_bstart),
+		       offsetof(typeof(*u.fi), fi_bend),
+		       offsetof(typeof(*u.fi), fi_h_vm_ops),
+		       offsetof(typeof(*u.fi), fi_vdir_cache),
+		       sizeof(*u.fi));
 		printk("ii{rwsem %d, bstart %d, bend %d, hinode %d, vdir %d} "
 		       "%d\n",
-		       offsetof(typeof(u.ii), ii_rwsem),
-		       offsetof(typeof(u.ii), ii_bstart),
-		       offsetof(typeof(u.ii), ii_bend),
-		       offsetof(typeof(u.ii), ii_hinode),
-		       offsetof(typeof(u.ii), ii_vdir),
-		       sizeof(u.ii));
+		       offsetof(typeof(*u.ii), ii_rwsem),
+		       offsetof(typeof(*u.ii), ii_bstart),
+		       offsetof(typeof(*u.ii), ii_bend),
+		       offsetof(typeof(*u.ii), ii_hinode),
+		       offsetof(typeof(*u.ii), ii_vdir),
+		       sizeof(*u.ii));
 		printk("hi{inode %d, id %d, notify %d} %d\n",
-		       offsetof(typeof(u.hi), hi_inode),
-		       offsetof(typeof(u.hi), hi_id),
-		       offsetof(typeof(u.hi), hi_notify),
-		       sizeof(u.hi));
+		       offsetof(typeof(*u.hi), hi_inode),
+		       offsetof(typeof(*u.hi), hi_id),
+		       offsetof(typeof(*u.hi), hi_notify),
+		       sizeof(*u.hi));
 		printk("si{rwsem %d, gen %d, "
 		       "failed_refresh %d, "
 		       "bend %d, last id %d, br %d, "
@@ -163,72 +179,89 @@ static int __init aufs_init(void)
 		       "dirwh %d, "
 		       "pl_lock %d, pl %d, "
 		       "kobj %d} %d\n",
-		       offsetof(typeof(u.si), si_rwsem),
-		       offsetof(typeof(u.si), si_generation),
-		       -1,//offsetof(typeof(u.si), si_failed_refresh_dirs),
-		       offsetof(typeof(u.si), si_bend),
-		       offsetof(typeof(u.si), si_last_br_id),
-		       offsetof(typeof(u.si), si_branch),
-		       offsetof(typeof(u.si), si_flags),
-		       offsetof(typeof(u.si), si_xino),
-		       offsetof(typeof(u.si), si_rdcache),
-		       offsetof(typeof(u.si), si_dirwh),
-		       offsetof(typeof(u.si), si_plink_lock),
-		       offsetof(typeof(u.si), si_plink),
-		       offsetof(typeof(u.si), si_kobj),
-		       sizeof(u.si));
+		       offsetof(typeof(*u.si), si_rwsem),
+		       offsetof(typeof(*u.si), si_generation),
+		       -1,//offsetof(typeof(*u.si), si_failed_refresh_dirs),
+		       offsetof(typeof(*u.si), si_bend),
+		       offsetof(typeof(*u.si), si_last_br_id),
+		       offsetof(typeof(*u.si), si_branch),
+		       offsetof(typeof(*u.si), si_flags),
+		       offsetof(typeof(*u.si), si_xino),
+		       offsetof(typeof(*u.si), si_rdcache),
+		       offsetof(typeof(*u.si), si_dirwh),
+		       offsetof(typeof(*u.si), si_plink_lock),
+		       offsetof(typeof(*u.si), si_plink),
+		       offsetof(typeof(*u.si), si_kobj),
+		       sizeof(*u.si));
 		printk("destr{len %d, name %d} %d\n",
-		       offsetof(typeof(u.destr), len),
-		       offsetof(typeof(u.destr), name),
-		       sizeof(u.destr));
+		       offsetof(typeof(*u.destr), len),
+		       offsetof(typeof(*u.destr), name),
+		       sizeof(*u.destr));
 		printk("de{ino %d, type %d, str %d} %d\n",
-		       offsetof(typeof(u.de), de_ino),
-		       offsetof(typeof(u.de), de_type),
-		       offsetof(typeof(u.de), de_str),
-		       sizeof(u.de));
+		       offsetof(typeof(*u.de), de_ino),
+		       offsetof(typeof(*u.de), de_type),
+		       offsetof(typeof(*u.de), de_str),
+		       sizeof(*u.de));
 		printk("wh{hash %d, bindex %d, str %d} %d\n",
-		       offsetof(typeof(u.wh), wh_hash),
-		       offsetof(typeof(u.wh), wh_bindex),
-		       offsetof(typeof(u.wh), wh_str),
-		       sizeof(u.wh));
+		       offsetof(typeof(*u.wh), wh_hash),
+		       offsetof(typeof(*u.wh), wh_bindex),
+		       offsetof(typeof(*u.wh), wh_str),
+		       sizeof(*u.wh));
 		printk("vd{deblk %d, nblk %d, last %d, ver %d, jiffy %d} %d\n",
-		       offsetof(typeof(u.vd), vd_deblk),
-		       offsetof(typeof(u.vd), vd_nblk),
-		       offsetof(typeof(u.vd), vd_last),
-		       offsetof(typeof(u.vd), vd_version),
-		       offsetof(typeof(u.vd), vd_jiffy),
-		       sizeof(u.vd));
+		       offsetof(typeof(*u.vd), vd_deblk),
+		       offsetof(typeof(*u.vd), vd_nblk),
+		       offsetof(typeof(*u.vd), vd_last),
+		       offsetof(typeof(*u.vd), vd_version),
+		       offsetof(typeof(*u.vd), vd_jiffy),
+		       sizeof(*u.vd));
 	}
 #endif
+#endif
+
+	p = esc_chars;
+	for (i = 1; i <= ' '; i++)
+		*p++ = i;
+	*p++ = '\\';
+	*p++ = '\x7f';
+	*p = 0;
+
+	au_dir_roflags = au_file_roflags(O_DIRECTORY | O_LARGEFILE);
+#ifndef CONFIG_AUFS_SYSAUFS
+	sysaufs_brs = 0;
 #endif
 
 	err = -EINVAL;
 	if (aufs_nwkq <= 0)
 		goto out;
 	err = create_cache();
-	if (err)
+	if (unlikely(err))
 		goto out;
-	err = init_wkq();
-	if (err)
+	err = sysaufs_init();
+	if (unlikely(err))
 		goto out_cache;
-	//err = init_kobj();
-	if (err)
-		goto out_wkq;
-	err = aufs_inotify_init();
-	if (err)
+	err = au_init_wkq();
+	if (unlikely(err))
 		goto out_kobj;
-	err = register_filesystem(&aufs_fs_type);
-	if (err)
+	err = aufs_inotify_init();
+	if (unlikely(err))
+		goto out_wkq;
+	err = dbg_dlgt_init();
+	if (unlikely(err))
 		goto out_inotify;
+	err = register_filesystem(&aufs_fs_type);
+	if (unlikely(err))
+		goto out_dlgt;
 	printk(AUFS_NAME " " AUFS_VERSION "\n");
 	return 0; /* success */
 
+ out_dlgt:
+	dbg_dlgt_exit();
  out_inotify:
 	aufs_inotify_exit();
- out_kobj:
-	//fin_kobj();
  out_wkq:
-	fin_wkq();
+	au_fin_wkq();
+ out_kobj:
+	sysaufs_fin();
  out_cache:
 	destroy_cache();
  out:
@@ -239,14 +272,17 @@ static int __init aufs_init(void)
 static void __exit aufs_exit(void)
 {
 	unregister_filesystem(&aufs_fs_type);
+	dbg_dlgt_exit();
 	aufs_inotify_exit();
-	//fin_kobj();
-	fin_wkq();
+	au_fin_wkq();
+	sysaufs_fin();
 	destroy_cache();
 }
 
 module_init(aufs_init);
 module_exit(aufs_exit);
+
+/* ---------------------------------------------------------------------- */
 
 // fake Kconfig
 #if 1
@@ -259,8 +295,27 @@ module_exit(aufs_exit);
 #endif
 #endif
 
-#if defined(CONFIG_AUFS_IPRIV_PATCH) && !defined(CONFIG_SECURITY)
-#error CONFIG_AUFS_IPRIV_PATCH requires CONFIG_SECURITY.
+#if AUFS_BRANCH_MAX > 511 && BITS_PER_LONG == 64 && PAGE_SIZE == 4096
+#warning For 4k pagesize and 64bit environment, \
+	CONFIG_AUFS_BRANCH_MAX_511 or smaller is recommended.
+#endif
+
+#ifdef CONFIG_AUFS_SYSAUFS
+#ifndef CONFIG_SYSFS
+#error CONFIG_AUFS_SYSAUFS requires CONFIG_SYSFS.
+#endif
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,18)
+#error CONFIG_AUFS_SYSAUFS requires linux-2.6.18 and later.
+#endif
+#endif
+
+#ifdef CONFIG_AUFS_EXPORT
+#if !defined(CONFIG_EXPORTFS) && !defined(CONFIG_EXPORTFS_MODULE)
+#error CONFIG_AUFS_EXPORT requires CONFIG_EXPORTFS
+#endif
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,18)
+#error CONFIG_AUFS_EXPORT requires linux-2.6.18 and later.
+#endif
 #endif
 
 #ifdef CONFIG_PROVE_LOCKING
