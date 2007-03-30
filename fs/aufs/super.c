@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: super.c,v 1.42 2007/03/20 07:30:32 sfjro Exp $ */
+/* $Id: super.c,v 1.43 2007/03/27 12:50:20 sfjro Exp $ */
 
 #include <linux/module.h>
 #include <linux/seq_file.h>
@@ -86,10 +86,10 @@ int au_show_brs(struct seq_file *seq, struct super_block *sb)
 	err = 0;
 	bend = sbend(sb);
 	for (bindex = 0; !err && bindex <= bend; bindex++) {
-		err = sbr_perm_str(sb, bindex, a, sizeof(a));
+		err = br_perm_str(a, sizeof(a), sbr_perm(sb, bindex));
 		if (!err)
 			err = seq_path(seq, sbr_mnt(sb, bindex),
-				       h_dptr_i(root, bindex), esc_chars);
+				       au_h_dptr_i(root, bindex), au_esc_chars);
 		if (err > 0)
 			err = seq_printf(seq, "=%s", a);
 		if (!err && bindex != bend)
@@ -100,6 +100,7 @@ int au_show_brs(struct seq_file *seq, struct super_block *sb)
 	return err;
 }
 
+//todo: test the return value for seq print functions.
 static int aufs_show_options(struct seq_file *m, struct vfsmount *mnt)
 {
 	int err, n;
@@ -120,7 +121,7 @@ static int aufs_show_options(struct seq_file *m, struct vfsmount *mnt)
 	root = sb->s_root;
 	aufs_read_lock(root, !AUFS_I_RLOCK);
 	sbinfo = stosi(sb);
-	if (IS_MS(sb, MS_XINO)) {
+	if (au_flag_test(sb, AuFlag_XINO)) {
 		struct aufs_branch *br;
 		struct file *f;
 		char *p, *q;
@@ -138,20 +139,20 @@ static int aufs_show_options(struct seq_file *m, struct vfsmount *mnt)
 #undef Deleted
 		*q = 0;
 		seq_puts(m, ",xino=");
-		seq_escape(m, p, esc_chars);
+		seq_escape(m, p, au_esc_chars);
 	} else
 		seq_puts(m, ",noxino");
-	n = IS_MS(sb, MS_PLINK);
-	if (unlikely((MS_DEF & MS_PLINK) != n))
+	n = au_flag_test(sb, AuFlag_PLINK);
+	if (unlikely((AuDefFlags & AuFlag_PLINK) != n))
 		seq_printf(m, ",%splink", n ? "" : "no");
-	n = MS_UDBA(sb);
-	if (unlikely((MS_DEF & MS_UDBA_MASK) != n))
+	n = au_flag_test_udba(sb);
+	if (unlikely((AuDefFlags & AuMask_UDBA) != n))
 		seq_printf(m, ",udba=%s", udba_str(n));
-	n = IS_MS(sb, MS_ALWAYS_DIROPQ);
-	if (unlikely((MS_DEF & MS_ALWAYS_DIROPQ) != n))
+	n = au_flag_test(sb, AuFlag_ALWAYS_DIROPQ);
+	if (unlikely((AuDefFlags & AuFlag_ALWAYS_DIROPQ) != n))
 		seq_printf(m, ",diropq=%c", n ? 'a' : 'w');
-	n = IS_MS(sb, MS_DLGT);
-	if (unlikely((MS_DEF & MS_DLGT) != n))
+	n = au_flag_test(sb, AuFlag_DLGT);
+	if (unlikely((AuDefFlags & AuFlag_DLGT) != n))
 		seq_printf(m, ",%sdlgt", n ? "" : "no");
 	n = sbinfo->si_dirwh;
 	if (unlikely(n != AUFS_DIRWH_DEF))
@@ -160,8 +161,8 @@ static int aufs_show_options(struct seq_file *m, struct vfsmount *mnt)
 	if (unlikely(n != AUFS_RDCACHE_DEF))
 		seq_printf(m, ",rdcache=%d", n);
 #if 0
-	n = MS_COO(sb);
-	if (unlikely((MS_DEF & MS_COO_MASK) != n))
+	n = au_flag_test_coo(sb);
+	if (unlikely((AuDefFlags & AuMask_COO) != n))
 		seq_printf(m, ",coo=%s", coo_str(n));
 #endif
 
@@ -189,7 +190,7 @@ static int aufs_show_options(struct seq_file *m, struct vfsmount *mnt)
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,18)
 #define StatfsLock(d)	aufs_read_lock((d)->d_sb->s_root, 0)
 #define StatfsUnlock(d)	aufs_read_unlock((d)->d_sb->s_root, 0)
-#define StatfsArg(d)	h_dptr((d)->d_sb->s_root)
+#define StatfsArg(d)	au_h_dptr((d)->d_sb->s_root)
 #define StatfsHInode(d)	StatfsArg(d)->d_inode
 #define StatfsSb(d)	(d)->d_sb
 static int aufs_statfs(struct dentry *arg, struct kstatfs *buf)
@@ -236,7 +237,7 @@ static void aufs_umount_begin(struct super_block *arg)
 		return;
 
 	si_write_lock(sb);
-	if (IS_MS(sb, MS_PLINK)) {
+	if (au_flag_test(sb, AuFlag_PLINK)) {
 		au_put_plink(sb);
 		//kobj_umount(stosi(sb));
 	}
@@ -249,7 +250,6 @@ static void free_sbinfo(struct aufs_sbinfo *sbinfo, int err)
 	DEBUG_ON(!sbinfo);
 	DEBUG_ON(!list_empty(&sbinfo->si_plink));
 
-	rw_destroy(&sbinfo->si_rwsem);
 	free_branches(sbinfo);
 	kfree(sbinfo->si_branch);
 	if (!err)
@@ -315,7 +315,7 @@ static int refresh_dir(struct dentry *root, int sgen)
 
 	LKTRTrace("sgen %d\n", sgen);
 	SiMustWriteLock(root->d_sb);
-	DEBUG_ON(digen(root) != sgen);
+	DEBUG_ON(au_digen(root) != sgen);
 	DiMustWriteLock(root);
 	DiMustNoWaiters(root);
 	IiMustNoWaiters(root->d_inode);
@@ -329,7 +329,7 @@ static int refresh_dir(struct dentry *root, int sgen)
 	if (!IS_ROOT(this_parent)
 	    && this_parent->d_inode
 	    && S_ISDIR(this_parent->d_inode->i_mode)
-	    && digen(this_parent) != sgen) {
+	    && au_digen(this_parent) != sgen) {
 		err = do_refresh_dir(this_parent, flags);
 		if (unlikely(err))
 			goto out;
@@ -348,7 +348,7 @@ static int refresh_dir(struct dentry *root, int sgen)
 			goto repeat;
 		}
 		if (dentry->d_inode && S_ISDIR(dentry->d_inode->i_mode)) {
-			DEBUG_ON(IS_ROOT(dentry) || digen(dentry) == sgen);
+			DEBUG_ON(IS_ROOT(dentry) || au_digen(dentry) == sgen);
 			err = do_refresh_dir(dentry, flags);
 			if (unlikely(err))
 				goto out;
@@ -408,8 +408,8 @@ static int aufs_remount_fs(struct super_block *sb, int *flags, char *data)
 		goto out;
 
 	/* parse it before aufs lock */
-	err = parse_opts(sb, data, &opts, /*remount*/1);
-	//if (LktrCond) {free_opts(&opts); err = -1;}
+	err = au_parse_opts(sb, data, &opts, /*remount*/1);
+	//if (LktrCond) {au_free_opts(&opts); err = -1;}
 	if (unlikely(err))
 		goto out_opts;
 
@@ -419,16 +419,16 @@ static int aufs_remount_fs(struct super_block *sb, int *flags, char *data)
 	aufs_write_lock(root);
 
 	v[Old][Sgen] = au_sigen(sb);
-	v[Old][Hinotify] = IS_MS(sb, MS_UDBA_INOTIFY);
-	v[Old][Xino] = IS_MS(sb, MS_XINO);
-	err = do_opts(sb, &opts, /*remount*/1);
+	v[Old][Hinotify] = au_flag_test(sb, AuFlag_UDBA_INOTIFY);
+	v[Old][Xino] = au_flag_test(sb, AuFlag_XINO);
+	err = au_do_opts(sb, &opts, /*remount*/1);
 	//if (LktrCond) err = -1;
-	free_opts(&opts);
+	au_free_opts(&opts);
 	v[New][Sgen] = au_sigen(sb);
-	v[New][Hinotify] = IS_MS(sb, MS_UDBA_INOTIFY);
-	v[New][Xino] = IS_MS(sb, MS_XINO);
+	v[New][Hinotify] = au_flag_test(sb, AuFlag_UDBA_INOTIFY);
+	v[New][Xino] = au_flag_test(sb, AuFlag_XINO);
 
-	/* do_opts() may return an error */
+	/* au_do_opts() may return an error */
 	sbinfo = stosi(sb);
 	refresh = 0;
 	for (i = 0; !refresh && i < 3; i++)
@@ -505,7 +505,7 @@ static int alloc_sbinfo(struct super_block *sb)
 		kfree(sbinfo);
 		goto out;
 	}
-	rw_init_wlock(&sbinfo->si_rwsem, AUFS_LSC_SBINFO);
+	rw_init_wlock(&sbinfo->si_rwsem);
 	sbinfo->si_bend = -1;
 	atomic_long_set(&sbinfo->si_xino, AUFS_FIRST_INO);
 	spin_lock_init(&sbinfo->si_plink_lock);
@@ -519,13 +519,13 @@ static int alloc_sbinfo(struct super_block *sb)
 	sbinfo->si_rdcache = AUFS_RDCACHE_DEF * HZ;
 	//memset(&sbinfo->si_kobj, 0, sizeof(sbinfo->si_kobj));
 	sb->s_fs_info = sbinfo;
-	MS_SET(sb, MS_DEF);
+	au_flag_set(sb, AuDefFlags);
 #ifdef ForceInotify
-	MS_CLR(sb, MS_UDBA_MASK);
-	MS_SET(sb, MS_UDBA_INOTIFY);
+	au_flag_clr(sb, AuMask_UDBA);
+	au_flag_set(sb, AuFlag_UDBA_INOTIFY);
 #endif
 #ifdef ForceDlgt
-	MS_SET(sb, MS_DLGT);
+	au_flag_set(sb, AuFlag_DLGT);
 #endif
 	return 0; /* success */
 
@@ -637,8 +637,8 @@ static int aufs_fill_super(struct super_block *sb, void *raw_data, int silent)
 	 * but at remount time, parsing must be done before aufs lock.
 	 * so we follow the same rule.
 	 */
-	err = parse_opts(sb, arg, &opts, /*remount*/0);
-	//if (LktrCond) {free_opts(&opts); err = -1;}
+	err = au_parse_opts(sb, arg, &opts, /*remount*/0);
+	//if (LktrCond) {au_free_opts(&opts); err = -1;}
 	if (unlikely(err))
 		goto out_root;
 
@@ -651,11 +651,11 @@ static int aufs_fill_super(struct super_block *sb, void *raw_data, int silent)
 	sb->s_maxbytes = 0;
 	xino = opts.xino;
 	memset(&opts.xino, 0, sizeof(opts.xino));
-	need_xino = IS_MS(sb, MS_XINO);
-	MS_CLR(sb, MS_XINO);
-	err = do_opts(sb, &opts, /*remount*/0);
+	need_xino = au_flag_test(sb, AuFlag_XINO);
+	au_flag_clr(sb, AuFlag_XINO);
+	err = au_do_opts(sb, &opts, /*remount*/0);
 	//if (LktrCond) err = -1;
-	free_opts(&opts);
+	au_free_opts(&opts);
 	if (unlikely(err))
 		goto out_unlock;
 
@@ -670,15 +670,16 @@ static int aufs_fill_super(struct super_block *sb, void *raw_data, int silent)
 	/* post-process options, xino only */
 	if (need_xino) {
 		/* disable inotify temporary */
-		const unsigned int hinotify = IS_MS(sb, MS_UDBA_INOTIFY);
+		const unsigned int hinotify
+			= au_flag_test(sb, AuFlag_UDBA_INOTIFY);
 		if (unlikely(hinotify)) {
-			MS_CLR(sb, MS_UDBA_INOTIFY);
-			MS_SET(sb, MS_UDBA_NONE);
+			au_flag_clr(sb, AuFlag_UDBA_INOTIFY);
+			au_flag_set(sb, AuFlag_UDBA_NONE);
 			au_reset_hinotify
 				(inode, au_hi_flags(inode, 1) & ~AUFS_HI_XINO);
 		}
 
-		MS_SET(sb, MS_XINO);
+		au_flag_set(sb, AuFlag_XINO);
 		if (!xino.file) {
 			xino.file = xino_def(sb);
 			//if (LktrCond) {fput(xino.file);xino.file=ERR_PTR(-1);}
@@ -699,8 +700,8 @@ static int aufs_fill_super(struct super_block *sb, void *raw_data, int silent)
 			goto out_unlock;
 
 		if (unlikely(hinotify)) {
-			MS_CLR(sb, MS_UDBA_NONE);
-			MS_SET(sb, MS_UDBA_INOTIFY);
+			au_flag_clr(sb, AuFlag_UDBA_NONE);
+			au_flag_set(sb, AuFlag_UDBA_INOTIFY);
 			au_reset_hinotify
 				(inode, au_hi_flags(inode, 1) & ~AUFS_HI_XINO);
 		}

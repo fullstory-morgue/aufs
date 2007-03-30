@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: whout.h,v 1.5 2007/03/19 04:32:35 sfjro Exp $ */
+/* $Id: whout.h,v 1.6 2007/03/27 12:45:47 sfjro Exp $ */
 
 #ifndef __AUFS_WHOUT_H__
 #define __AUFS_WHOUT_H__
@@ -38,16 +38,14 @@ struct dentry *lkup_whtmp(struct dentry *h_parent, struct qstr *prefix,
 			  struct lkup_args *lkup);
 int rename_whtmp(struct dentry *dentry, aufs_bindex_t bindex);
 int au_unlink_wh_dentry(struct inode *h_dir, struct dentry *wh_dentry,
-			struct dentry *dentry, int do_dlgt);
+			struct dentry *dentry, int dlgt);
 
 struct aufs_branch;
 int init_wh(struct dentry *h_parent, struct aufs_branch *br,
 	    struct vfsmount *nfsmnt);
 
 struct dentry *sio_diropq(struct dentry *dentry, aufs_bindex_t bindex,
-			  int do_create, int do_dlgt);
-#define create_diropq(d, i, dlgt)	sio_diropq(d, i, 1, dlgt)
-#define remove_diropq(d, i, dlgt)	PTR_ERR(sio_diropq(d, i, 0, dlgt))
+			  int do_create, int dlgt);
 
 struct dentry *lkup_wh(struct dentry *h_parent, struct qstr *base_name,
 		       struct lkup_args *lkup);
@@ -68,6 +66,21 @@ int rmdir_whtmp(struct dentry *h_dentry, struct aufs_nhash *whlist,
 void kick_rmdir_whtmp(struct dentry *h_dentry, struct aufs_nhash *whlist,
 		      aufs_bindex_t bindex, struct inode *dir,
 		      struct inode *inode, struct rmdir_whtmp_arg *arg);
+
+/* ---------------------------------------------------------------------- */
+
+static inline
+struct dentry *create_diropq(struct dentry *dentry, aufs_bindex_t bindex,
+			     int dlgt)
+{
+	return sio_diropq(dentry, bindex, 1, dlgt);
+}
+
+static inline
+int remove_diropq(struct dentry *dentry, aufs_bindex_t bindex, int dlgt)
+{
+	return PTR_ERR(sio_diropq(dentry, bindex, 0, dlgt));
+}
 
 #endif /* __KERNEL__ */
 #endif /* __AUFS_WHOUT_H__ */

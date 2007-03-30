@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: module.c,v 1.5 2007/03/19 04:32:35 sfjro Exp $ */
+/* $Id: module.c,v 1.6 2007/03/27 12:49:49 sfjro Exp $ */
 
 //#include <linux/init.h>
 //#include <linux/kobject.h>
@@ -30,37 +30,37 @@
 /*
  * aufs caches
  */
-struct kmem_cache *aufs_cachep[_AufsCacheLast];
+struct kmem_cache *aufs_cachep[AuCache_Last];
 static int __init create_cache(void)
 {
 #define Cache(type) \
 	kmem_cache_create(#type, sizeof(struct type), 0, \
 			  SLAB_RECLAIM_ACCOUNT, NULL, NULL)
 
-	if ((aufs_cachep[AUFS_CACHE_DINFO] = Cache(aufs_dinfo))
-	    && (aufs_cachep[AUFS_CACHE_ICNTNR] = Cache(aufs_icntnr))
-	    && (aufs_cachep[AUFS_CACHE_FINFO] = Cache(aufs_finfo))
-	    //&& (aufs_cachep[AUFS_CACHE_FINFO] = NULL)
-	    && (aufs_cachep[AUFS_CACHE_VDIR] = Cache(aufs_vdir))
-	    && (aufs_cachep[AUFS_CACHE_DEHSTR] = Cache(aufs_dehstr))
-	    && (aufs_cachep[AUFS_CACHE_HINOTIFY] = Cache(aufs_hinotify)))
+	if ((aufs_cachep[AuCache_DINFO] = Cache(aufs_dinfo))
+	    && (aufs_cachep[AuCache_ICNTNR] = Cache(aufs_icntnr))
+	    && (aufs_cachep[AuCache_FINFO] = Cache(aufs_finfo))
+	    //&& (aufs_cachep[AuCache_FINFO] = NULL)
+	    && (aufs_cachep[AuCache_VDIR] = Cache(aufs_vdir))
+	    && (aufs_cachep[AuCache_DEHSTR] = Cache(aufs_dehstr))
+	    && (aufs_cachep[AuCache_HINOTIFY] = Cache(aufs_hinotify)))
 		return 0;
 	return -ENOMEM;
 
 #undef Cache
 }
 
-static void __exit destroy_cache(void)
+static void destroy_cache(void)
 {
 	int i;
-	for (i = 0; i < _AufsCacheLast; i++)
+	for (i = 0; i < AuCache_Last; i++)
 		if (aufs_cachep[i])
 			kmem_cache_destroy(aufs_cachep[i]);
 }
 
 /* ---------------------------------------------------------------------- */
 
-char esc_chars[0x20 + 3]; /* 0x01-0x20, backslash, del, and NULL */
+char au_esc_chars[0x20 + 3]; /* 0x01-0x20, backslash, del, and NULL */
 int au_dir_roflags;
 extern struct file_system_type aufs_fs_type;
 
@@ -80,9 +80,10 @@ MODULE_AUTHOR("Junjiro Okajima");
 MODULE_DESCRIPTION(AUFS_NAME " -- Another unionfs");
 MODULE_VERSION(AUFS_VERSION);
 
-unsigned char aufs_nwkq = AUFS_NWKQ_DEF;
+/* it should be 'byte', but param_set_byte() prints by "%c" */
+short aufs_nwkq = AUFS_NWKQ_DEF;
 MODULE_PARM_DESC(nwkq, "the number of workqueue thread, " AUFS_WKQ_NAME);
-module_param_named(nwkq, aufs_nwkq, byte, 0444);
+module_param_named(nwkq, aufs_nwkq, short, 0444);
 
 int sysaufs_brs = 0;
 MODULE_PARM_DESC(brs, "use <sysfs>/fs/aufs/brs");
@@ -218,7 +219,7 @@ static int __init aufs_init(void)
 #endif
 #endif
 
-	p = esc_chars;
+	p = au_esc_chars;
 	for (i = 1; i <= ' '; i++)
 		*p++ = i;
 	*p++ = '\\';
@@ -242,7 +243,7 @@ static int __init aufs_init(void)
 	err = au_init_wkq();
 	if (unlikely(err))
 		goto out_kobj;
-	err = aufs_inotify_init();
+	err = au_inotify_init();
 	if (unlikely(err))
 		goto out_wkq;
 	err = dbg_dlgt_init();
@@ -257,7 +258,7 @@ static int __init aufs_init(void)
  out_dlgt:
 	dbg_dlgt_exit();
  out_inotify:
-	aufs_inotify_exit();
+	au_inotify_exit();
  out_wkq:
 	au_fin_wkq();
  out_kobj:
@@ -273,7 +274,7 @@ static void __exit aufs_exit(void)
 {
 	unregister_filesystem(&aufs_fs_type);
 	dbg_dlgt_exit();
-	aufs_inotify_exit();
+	au_inotify_exit();
 	au_fin_wkq();
 	sysaufs_fin();
 	destroy_cache();
@@ -318,8 +319,10 @@ module_exit(aufs_exit);
 #endif
 #endif
 
-#ifdef CONFIG_PROVE_LOCKING
-#warning CONFIG_PROVE_LOCKING will produce msgs to innocent locks.
+#ifdef CONFIG_DEBUG_PROVE_LOCKING
+#if MAX_LOCKDEP_SUBCLASSES < AuLsc_End
+#warning lockdep will not work since aufs uses deeper locks.
+#endif
 #endif
 
 #ifdef CONFIG_AUFS_COMPAT

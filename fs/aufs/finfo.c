@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: finfo.c,v 1.20 2007/03/19 04:30:31 sfjro Exp $ */
+/* $Id: finfo.c,v 1.21 2007/03/27 12:49:17 sfjro Exp $ */
 
 #include "aufs.h"
 
@@ -66,7 +66,7 @@ struct aufs_branch *ftobr(struct file *file, aufs_bindex_t bindex)
 	return hf->hf_br;
 }
 
-struct file *h_fptr_i(struct file *file, aufs_bindex_t bindex)
+struct file *au_h_fptr_i(struct file *file, aufs_bindex_t bindex)
 {
 	struct aufs_finfo *finfo = ftofi(file);
 	struct aufs_hfile *hf;
@@ -83,9 +83,9 @@ struct file *h_fptr_i(struct file *file, aufs_bindex_t bindex)
 	return hf->hf_file;
 }
 
-struct file *h_fptr(struct file *file)
+struct file *au_h_fptr(struct file *file)
 {
-	return h_fptr_i(file, fbstart(file));
+	return au_h_fptr_i(file, fbstart(file));
 }
 
 void set_fbstart(struct file *file, aufs_bindex_t bindex)
@@ -93,7 +93,6 @@ void set_fbstart(struct file *file, aufs_bindex_t bindex)
 	FiMustWriteLock(file);
 	DEBUG_ON(sbend(file->f_dentry->d_sb) < bindex);
 	ftofi(file)->fi_bstart = bindex;
-	//smp_mb();
 }
 
 void set_fbend(struct file *file, aufs_bindex_t bindex)
@@ -102,7 +101,6 @@ void set_fbend(struct file *file, aufs_bindex_t bindex)
 	DEBUG_ON(sbend(file->f_dentry->d_sb) < bindex
 		 || bindex < fbstart(file));
 	ftofi(file)->fi_bend = bindex;
-	//smp_mb();
 }
 
 void set_fvdir_cache(struct file *file, struct aufs_vdir *vdir_cache)
@@ -111,7 +109,6 @@ void set_fvdir_cache(struct file *file, struct aufs_vdir *vdir_cache)
 	DEBUG_ON(!S_ISDIR(file->f_dentry->d_inode->i_mode)
 		 || (ftofi(file)->fi_vdir_cache && vdir_cache));
 	ftofi(file)->fi_vdir_cache = vdir_cache;
-	//smp_mb();
 }
 
 void set_h_fptr(struct file *file, aufs_bindex_t bindex, struct file *val)
@@ -138,12 +135,11 @@ void set_h_fptr(struct file *file, aufs_bindex_t bindex, struct file *val)
 		hf->hf_file = val;
 		hf->hf_br = stobr(file->f_dentry->d_sb, bindex);
 	}
-	//smp_mb();
 }
 
 void au_update_figen(struct file *file)
 {
-	atomic_set(&ftofi(file)->fi_generation, digen(file->f_dentry));
+	atomic_set(&ftofi(file)->fi_generation, au_digen(file->f_dentry));
 }
 
 void au_fin_finfo(struct file *file)
@@ -177,7 +173,6 @@ void au_fin_finfo(struct file *file)
 
 	kfree(finfo->fi_hfile);
 	fi_write_unlock(file);
-	rw_destroy(&finfo->fi_rwsem);
 	cache_free_finfo(finfo);
 	//file->private_data = NULL;
 	si_read_unlock(dentry->d_sb);
@@ -197,10 +192,10 @@ int au_init_finfo(struct file *file)
 		finfo->fi_hfile = kcalloc(sbend(dentry->d_sb) + 1,
 					  sizeof(*finfo->fi_hfile), GFP_KERNEL);
 		if (finfo->fi_hfile) {
-			rw_init_wlock(&finfo->fi_rwsem, AUFS_LSC_FINFO);
+			rw_init_wlock(&finfo->fi_rwsem);
 			finfo->fi_bstart = -1;
 			finfo->fi_bend = -1;
-			atomic_set(&finfo->fi_generation, digen(dentry));
+			atomic_set(&finfo->fi_generation, au_digen(dentry));
 
 			file->private_data = finfo;
 			return 0; /* success */

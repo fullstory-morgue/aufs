@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: opts.c,v 1.28 2007/03/19 04:32:35 sfjro Exp $ */
+/* $Id: opts.c,v 1.29 2007/03/27 12:50:10 sfjro Exp $ */
 
 #include <asm/types.h> // a distribution requires
 #include <linux/parser.h>
@@ -64,7 +64,7 @@ static match_table_t options = {
 	{Opt_xino, "xino=%s"},
 	{Opt_xino, "xino:%s"},
 	{Opt_noxino, "noxino"},
-	{Opt_zxino, "zxino=%s"},
+	//{Opt_zxino, "zxino=%s"},
 
 #if LINUX_VERSION_CODE != KERNEL_VERSION(2,6,15)
 	{Opt_plink, "plink"},
@@ -85,15 +85,16 @@ static match_table_t options = {
 	{Opt_warn_perm, "warn_perm"},
 	{Opt_nowarn_perm, "nowarn_perm"},
 
-	{Opt_findrw_dir, "findrw=dir"},
-	{Opt_findrw_br, "findrw=br"},
-
-	{Opt_coo, "coo=%s"},
-
 #ifdef CONFIG_AUFS_DLGT
 	{Opt_dlgt, "dlgt"},
 	{Opt_nodlgt, "nodlgt"},
 #endif
+
+#if 0
+	{Opt_findrw_dir, "findrw=dir"},
+	{Opt_findrw_br, "findrw=br"},
+
+	{Opt_coo, "coo=%s"},
 
 	{Opt_rdcache, "rdcache=%d"},
 	{Opt_rdcache, "rdcache:%d"},
@@ -101,6 +102,7 @@ static match_table_t options = {
 	{Opt_deblk, "deblk:%d"},
 	{Opt_nhash, "nhash=%d"},
 	{Opt_nhash, "nhash:%d"},
+#endif
 
 	{Opt_br, "dirs=%s"},
 	{Opt_ignore, "debug=%d"},
@@ -118,94 +120,61 @@ static match_table_t options = {
 #define WH	"wh"
 #define RR	"rr"
 
-enum {Br_rw, Br_ro, Br_wh, Br_rr, Br_err};
 static match_table_t brperms = {
-	{Br_rw, RW},
-	{Br_ro, RO},
-	{Br_wh, WH},
-	{Br_rr, RR},
-	{Br_ro, "nfsro"},
-	{Br_err, NULL}
+	{AuBrPerm_RR, RR},
+	{AuBrPerm_RO, RO},
+	{AuBrPerm_RW, RW},
+
+	{AuBrPerm_ROWH, RO WH},
+	{AuBrPerm_ROWH, RO "+" WH},
+	{AuBrPerm_RRWH, RR WH},
+	{AuBrPerm_RRWH, RR "+" WH},
+
+	{AuBrPerm_RO, "nfsro"},
+	{AuBrPerm_RO, NULL}
 };
 
-static unsigned int br_perm_val(char *perm)
+static int br_perm_val(char *perm)
 {
 	int val;
-	char *p;
 	substring_t args[MAX_OPT_ARGS];
 
-	//LKTRTrace("perm %s\n", perm);
-
-	val = 0;
-	if (!perm || !*perm || *perm == '+')
-		goto out;
-
-	val = MAY_READ;
-	while (val && (p = strsep(&perm, "+")) && *p) {
-		LKTRTrace("p %s\n", p);
-		switch (match_token(p, brperms, args)) {
-		case Br_rw:
-			val |= MAY_WRITE;
-			break;
-		case Br_ro:
-			//val |= MAY_READ;
-			break;
-		case Br_rr:
-			val |= AUFS_MAY_RR;
-			break;
-		case Br_wh:
-			val |= AUFS_MAY_WH;
-			break;
-		case Br_err:
-			val = 0;
-			break;
-		}
-	}
-
- out:
-	//LKTRTrace("val 0x%x\n", val);
+	LKTRTrace("perm %s\n", perm);
+	val = AuBrPerm_RO;
+	if (perm && *perm)
+		val = match_token(perm, brperms, args);
+	TraceErr(val);
 	return val;
 }
 
-static int copy_perm_str(char **dst, int *room, char *src, int srclen)
+int br_perm_str(char *p, int len, int brperm)
 {
-	if (srclen + 1 < *room) {
-		strcpy(*dst, src);
-		*dst += srclen;
-		*room -= srclen;
-		//smp_mb();
-		return 0;
+	struct match_token *bp = brperms;
+
+	LKTRTrace("len %d, 0x%x\n", len, brperm);
+
+	while (bp->pattern) {
+		if (bp->token == brperm) {
+			if (strlen(bp->pattern) < len) {
+				strcpy(p, bp->pattern);
+				return 0;
+			} else
+				return -E2BIG;
+		}
+		bp++;
 	}
-	return -E2BIG;
-}
 
-int br_perm_str(char *p, int len, unsigned int perm)
-{
-	int err;
-
-	LKTRTrace("len %d, 0x%x\n", len, perm);
-
-	len--;
-	if (unlikely(perm & MAY_WRITE))
-		return copy_perm_str(&p, &len, RW, sizeof(RW) - 1);
-	if (unlikely(perm & AUFS_MAY_RR))
-		return copy_perm_str(&p, &len, RR, sizeof(RR) - 1);
-
-	DEBUG_ON(!(perm & MAY_READ));
-	err = copy_perm_str(&p, &len, RO, sizeof(RO) - 1);
-	if (!err && (perm & AUFS_MAY_WH))
-		err = copy_perm_str(&p, &len, "+" WH, sizeof(WH));
-	return err;
+	return -EIO;
 }
 
 /* ---------------------------------------------------------------------- */
 
 static match_table_t udbalevel = {
-	{MS_UDBA_REVAL, "reval"},
-#if defined(CONFIG_AUFS_HINOTIFY) && !defined(CONFIG_AUFS_DEBUG_RWSEM)
-	{MS_UDBA_INOTIFY, "inotify"},
+	{AuFlag_UDBA_REVAL, "reval"},
+#ifdef CONFIG_AUFS_HINOTIFY
+	{AuFlag_UDBA_INOTIFY, "inotify"},
 #endif
-	{MS_UDBA_NONE, "none"},
+	{AuFlag_UDBA_NONE, "none"},
 	{-1, NULL}
 };
 
@@ -229,16 +198,16 @@ char *udba_str(int udba)
 
 static void udba_set(struct super_block *sb, unsigned int flg)
 {
-	MS_CLR(sb, MS_UDBA_MASK);
-	MS_SET(sb, flg);
+	au_flag_clr(sb, AuMask_UDBA);
+	au_flag_set(sb, flg);
 }
 
 /* ---------------------------------------------------------------------- */
 
 static match_table_t coolevel = {
-	{MS_COO_LEAF, "leaf"},
-	{MS_COO_ALL, "all"},
-	{MS_COO_NONE, "none"},
+	{AuFlag_COO_LEAF, "leaf"},
+	{AuFlag_COO_ALL, "all"},
+	{AuFlag_COO_NONE, "none"},
 	{-1, NULL}
 };
 
@@ -263,8 +232,8 @@ char *coo_str(int coo)
 }
 static void coo_set(struct super_block *sb, unsigned int flg)
 {
-	MS_CLR(sb, MS_COO_MASK);
-	MS_SET(sb, flg);
+	au_flag_clr(sb, AuMask_COO);
+	au_flag_set(sb, flg);
 }
 
 /* ---------------------------------------------------------------------- */
@@ -372,7 +341,7 @@ static void dump_opts(struct opts *opts)
 #define dump_opts(opts) /* */
 #endif
 
-void free_opts(struct opts *opts)
+void au_free_opts(struct opts *opts)
 {
 	struct opt *opt;
 
@@ -412,11 +381,11 @@ static int opt_add(struct opt *opt, char *opt_str, struct super_block *sb,
 	LKTRTrace("%s, b%d\n", opt_str, bindex);
 
 	add->bindex = bindex;
-	add->perm = MAY_READ;
-	if (!bindex)
-		add->perm |= MAY_WRITE;
+	add->perm = AuBrPerm_RO;
+	if (!bindex && !(sb->s_flags & MS_RDONLY))
+		add->perm = AuBrPerm_RW;
 #ifdef CONFIG_AUFS_COMPAT
-	add->perm = MAY_READ | MAY_WRITE;
+	add->perm = AuBrPerm_RW;
 #endif
 	add->path = opt_str;
 	p = strchr(opt_str, '=');
@@ -448,8 +417,8 @@ static int opt_add(struct opt *opt, char *opt_str, struct super_block *sb,
 }
 
 /* called without aufs lock */
-int parse_opts(struct super_block *sb, char *str, struct opts *opts,
-	       int remount)
+int au_parse_opts(struct super_block *sb, char *str, struct opts *opts,
+		  int remount)
 {
 	int err, n;
 	struct dentry *root;
@@ -542,7 +511,7 @@ int parse_opts(struct super_block *sb, char *str, struct opts *opts,
 				break;
 			}
 			err = 0;
-			del->h_root = dget(h_dptr_i(root, bindex));
+			del->h_root = dget(au_h_dptr_i(root, bindex));
 			opt->type = token;
 			aufs_read_unlock(root, !AUFS_I_RLOCK);
 			break;
@@ -599,7 +568,7 @@ int parse_opts(struct super_block *sb, char *str, struct opts *opts,
 				break;
 			}
 			err = 0;
-			mod->h_root = dget(h_dptr_i(root, bindex));
+			mod->h_root = dget(au_h_dptr_i(root, bindex));
 			opt->type = token;
 			aufs_read_unlock(root, !AUFS_I_RLOCK);
 			break;
@@ -703,19 +672,18 @@ int parse_opts(struct super_block *sb, char *str, struct opts *opts,
 			}
 			opt->type = Opt_tail;
 		}
-		//smp_mb();
 	}
 
 	dump_opts(opts);
 	if (unlikely(err))
-		free_opts(opts);
+		au_free_opts(opts);
 	TraceErr(err);
 	return err;
 }
 
-int do_opts(struct super_block *sb, struct opts *opts, int remount)
+int au_do_opts(struct super_block *sb, struct opts *opts, int remount)
 {
-	int err;
+	int err, do_sigen;
 	struct opt *opt;
 	struct aufs_sbinfo *sbinfo;
 	struct inode *dir;
@@ -728,17 +696,19 @@ int do_opts(struct super_block *sb, struct opts *opts, int remount)
 	IiMustWriteLock(dir);
 
 	/* disable inotify temporary */
-	udba = IS_MS(sb, MS_UDBA_MASK);
-	if (unlikely(udba == MS_UDBA_INOTIFY && ibend(dir) >= 0)) {
-		udba_set(sb, MS_UDBA_NONE);
+	udba = au_flag_test(sb, AuMask_UDBA);
+	if (unlikely(udba == AuFlag_UDBA_INOTIFY && ibend(dir) >= 0)) {
+		udba_set(sb, AuFlag_UDBA_NONE);
 		au_reset_hinotify(dir, au_hi_flags(dir, 1) & ~AUFS_HI_XINO);
 	}
 
 	err = 0;
+	do_sigen = 0;
 	if (opts->xino.path) {
 		err = xino_set(sb, &opts->xino, remount);
 		if (unlikely(err))
 			goto out;
+		do_sigen++;
 	}
 
 	sbinfo = stosi(sb);
@@ -747,22 +717,34 @@ int do_opts(struct super_block *sb, struct opts *opts, int remount)
 		switch (opt->type) {
 		case Opt_add:
 			err = br_add(sb, &opt->add, remount);
+			if (!err)
+				do_sigen++;
 			break;
 		case Opt_del:
 		case Opt_idel:
 			err = br_del(sb, &opt->del, remount);
+			if (!err)
+				do_sigen++;
 			break;
 		case Opt_mod:
 		case Opt_imod:
 			err = br_mod(sb, &opt->mod, remount);
+			if (err > 0) {
+				do_sigen++;
+				err = 0;
+			}
 			break;
 		case Opt_append:
 			opt->add.bindex = sbend(sb) + 1;
 			err = br_add(sb, &opt->add, remount);
+			if (!err)
+				do_sigen++;
 			break;
 		case Opt_prepend:
 			opt->add.bindex = 0;
 			err = br_add(sb, &opt->add, remount);
+			if (!err)
+				do_sigen++;
 			break;
 
 		case Opt_dirwh:
@@ -778,46 +760,47 @@ int do_opts(struct super_block *sb, struct opts *opts, int remount)
 			break;
 
 		case Opt_plink:
-			MS_SET(sb, MS_PLINK);
+			au_flag_set(sb, AuFlag_PLINK);
 			break;
 		case Opt_noplink:
-			if (IS_MS(sb, MS_PLINK))
+			if (au_flag_test(sb, AuFlag_PLINK))
 				au_put_plink(sb);
-			MS_CLR(sb, MS_PLINK);
+			au_flag_clr(sb, AuFlag_PLINK);
 			break;
 		case Opt_list_plink:
-			if (IS_MS(sb, MS_PLINK))
+			if (au_flag_test(sb, AuFlag_PLINK))
 				au_list_plink(sb);
 			break;
 		case Opt_clean_plink:
-			if (IS_MS(sb, MS_PLINK))
+			if (au_flag_test(sb, AuFlag_PLINK))
 				au_put_plink(sb);
 			break;
 
 		case Opt_udba:
 			/* set it later */
 			udba = opt->udba;
+			do_sigen++;
 			break;
 
 		case Opt_diropq_a:
-			MS_SET(sb, MS_ALWAYS_DIROPQ);
+			au_flag_set(sb, AuFlag_ALWAYS_DIROPQ);
 			break;
 		case Opt_diropq_w:
-			MS_CLR(sb, MS_ALWAYS_DIROPQ);
+			au_flag_clr(sb, AuFlag_ALWAYS_DIROPQ);
 			break;
 
 		case Opt_warn_perm:
-			MS_SET(sb, MS_WARN_PERM);
+			au_flag_set(sb, AuFlag_WARN_PERM);
 			break;
 		case Opt_nowarn_perm:
-			MS_CLR(sb, MS_WARN_PERM);
+			au_flag_clr(sb, AuFlag_WARN_PERM);
 			break;
 
 		case Opt_dlgt:
-			MS_SET(sb, MS_DLGT);
+			au_flag_set(sb, AuFlag_DLGT);
 			break;
 		case Opt_nodlgt:
-			MS_CLR(sb, MS_DLGT);
+			au_flag_clr(sb, AuFlag_DLGT);
 			break;
 
 		case Opt_coo:
@@ -833,12 +816,15 @@ int do_opts(struct super_block *sb, struct opts *opts, int remount)
 
 	if (unlikely(sbend(sb) >= 0
 		     && !(sb->s_flags & MS_RDONLY)
-		     && !(stobr(sb, 0)->br_perm & MAY_WRITE)))
+		     && sbr_perm(sb, 0) != AuBrPerm_RW))
 		Warn("first branch should be rw\n");
+
+	if (do_sigen)
+		au_sigen_inc(sb);
 
 	udba_set(sb, udba);
 	/* AUFS_HI_XINO will be handled later */
-	if (unlikely(udba == MS_UDBA_INOTIFY && ibend(dir) >= 0))
+	if (unlikely(udba == AuFlag_UDBA_INOTIFY && ibend(dir) >= 0))
 		au_reset_hinotify(dir, au_hi_flags(dir, 1) & ~AUFS_HI_XINO);
 
  out:

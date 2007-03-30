@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: i_op.c,v 1.27 2007/03/19 04:31:31 sfjro Exp $ */
+/* $Id: i_op.c,v 1.28 2007/03/27 12:49:32 sfjro Exp $ */
 
 //#include <linux/fs.h>
 //#include <linux/namei.h>
@@ -24,6 +24,7 @@
 #include <asm/uaccess.h>
 #include "aufs.h"
 
+#ifdef CONFIG_AUFS_DLGT
 struct security_inode_permission_args {
 	int *errp;
 	struct inode *h_inode;
@@ -31,12 +32,13 @@ struct security_inode_permission_args {
 	struct nameidata *fake_nd;
 };
 
-void call_security_inode_permission(void *args)
+static void call_security_inode_permission(void *args)
 {
 	struct security_inode_permission_args *a = args;
 	LKTRTrace("fsuid %d\n", current->fsuid);
 	*a->errp = security_inode_permission(a->h_inode, a->mask, a->fake_nd);
 }
+#endif
 
 static int hidden_permission(struct inode *hidden_inode, int mask,
 			     struct nameidata *fake_nd, int brperm, int dlgt)
@@ -53,7 +55,7 @@ static int hidden_permission(struct inode *hidden_inode, int mask,
 
 	/* skip hidden fs test in the case of write to ro branch */
 	submask = mask & ~MAY_APPEND;
-	if (unlikely((write_mask && !(brperm & MAY_WRITE))
+	if (unlikely((write_mask && brperm != AuBrPerm_RW)
 		     || !hidden_inode->i_op
 		     || !hidden_inode->i_op->permission)) {
 		//LKTRLabel(generic_permission);
@@ -67,7 +69,9 @@ static int hidden_permission(struct inode *hidden_inode, int mask,
 
 #if 1
 	if (!err) {
-		// todo: refine it
+#ifndef CONFIG_AUFS_DLGT
+		err = security_inode_permission(hidden_inode, mask, fake_nd);
+#else
 		if (!dlgt)
 			err = security_inode_permission(hidden_inode, mask,
 							fake_nd);
@@ -81,6 +85,7 @@ static int hidden_permission(struct inode *hidden_inode, int mask,
 			wkq_wait(call_security_inode_permission, &args,
 				 /*dlgt*/1);
 		}
+#endif
 	}
 #endif
 
@@ -168,7 +173,7 @@ static int aufs_permission(struct inode *inode, int mask, struct nameidata *nd)
 	if (nd)
 		fake_nd = *nd;
 	if (/* unlikely */(nondir || write_mask)) {
-		hidden_inode = h_iptr(inode);
+		hidden_inode = au_h_iptr(inode);
 		DEBUG_ON(!hidden_inode
 			 || ((hidden_inode->i_mode & S_IFMT)
 			     != (inode->i_mode & S_IFMT)));
@@ -195,7 +200,7 @@ static int aufs_permission(struct inode *inode, int mask, struct nameidata *nd)
 	err = 0;
 	bend = ibend(inode);
 	for (bindex = ibstart(inode); !err && bindex <= bend; bindex++) {
-		hidden_inode = h_iptr_i(inode, bindex);
+		hidden_inode = au_h_iptr_i(inode, bindex);
 		if (!hidden_inode)
 			continue;
 		DEBUG_ON(!S_ISDIR(hidden_inode->i_mode));
@@ -245,7 +250,7 @@ static struct dentry *aufs_lookup(struct inode *dir, struct dentry *dentry,
 		goto out_unlock;
 	inode = NULL;
 	if (npositive) {
-		inode = aufs_new_inode(dentry);
+		inode = au_new_inode(dentry);
 		ret = (void*)inode;
 	}
 	if (!IS_ERR(inode)) {
@@ -320,7 +325,7 @@ int wr_dir(struct dentry *dentry, int add_entry, struct dentry *src_dentry,
 		goto out; /* success */
 
 	/* copyup the new parent into the branch we process */
-	hidden_parent = h_dptr(dentry)->d_parent; // dget_parent()
+	hidden_parent = au_h_dptr(dentry)->d_parent; // dget_parent()
 	if (src_dentry) {
 		src_parent = src_dentry->d_parent; // dget_parent()
 		src_dir = src_parent->d_inode;
@@ -338,11 +343,11 @@ int wr_dir(struct dentry *dentry, int add_entry, struct dentry *src_dentry,
 		di_write_lock_parent(parent);
 
 	err = 0;
-	if (!h_dptr_i(parent, bcpup))
+	if (!au_h_dptr_i(parent, bcpup))
 		err = cpup_dirs(dentry, bcpup, src_parent);
 	//err = -1;
 	if (!err && add_entry) {
-		hidden_parent = h_dptr_i(parent, bcpup);
+		hidden_parent = au_h_dptr_i(parent, bcpup);
 		DEBUG_ON(!hidden_parent || !hidden_parent->d_inode);
 		hi_lock_parent(hidden_parent->d_inode);
 		err = lkup_neg(dentry, bcpup);
@@ -385,27 +390,27 @@ static int aufs_setattr(struct dentry *dentry, struct iattr *ia)
 		goto out;
 
 	/* crazy udba locks */
-	udba = IS_MS(dentry->d_sb, MS_UDBA_INOTIFY);
+	udba = au_flag_test(dentry->d_sb, AuFlag_UDBA_INOTIFY);
 	parent = NULL;
 	gdir = gh_dir = dir = h_dir = NULL;
 	if ((udba || bstart != bcpup) && !IS_ROOT(dentry)) {
 		parent = dentry->d_parent; // dget_parent()
 		dir = parent->d_inode;
 		di_read_lock_parent(parent, AUFS_I_RLOCK);
-		h_dir = h_iptr_i(dir, bcpup);
+		h_dir = au_h_iptr_i(dir, bcpup);
 	}
 	if (parent) {
 		if (unlikely(udba && !IS_ROOT(parent))) {
 			gdir = parent->d_parent->d_inode;  // dget_parent()
 			ii_read_lock_parent2(gdir);
-			gh_dir = h_iptr_i(gdir, bcpup);
+			gh_dir = au_h_iptr_i(gdir, bcpup);
 			hgdir_lock(gh_dir, gdir, bcpup);
 		}
 		hdir_lock(h_dir, dir, bcpup);
 	}
 
 	isdir = S_ISDIR(inode->i_mode);
-	hidden_dentry = h_dptr(dentry);
+	hidden_dentry = au_h_dptr(dentry);
 	hidden_inode = hidden_dentry->d_inode;
 	DEBUG_ON(!hidden_inode);
 
@@ -438,14 +443,13 @@ static int aufs_setattr(struct dentry *dentry, struct iattr *ia)
 		if (unlikely(err || !ia->ia_valid))
 			goto out_unlock;
 
-		hidden_dentry = h_dptr(dentry);
+		hidden_dentry = au_h_dptr(dentry);
 		hidden_inode = hidden_dentry->d_inode;
 		DEBUG_ON(!hidden_inode);
 	}
 
 	HiLock(bcpup);
-	err = hidden_notify_change(hidden_dentry, ia, NULL,
-				   need_dlgt(dentry->d_sb));
+	err = vfsub_notify_change(hidden_dentry, ia, need_dlgt(dentry->d_sb));
 	//err = -1;
 	if (!err)
 		au_cpup_attr_changable(inode);
@@ -476,7 +480,7 @@ static int hidden_readlink(struct dentry *dentry, int bindex,
 	struct super_block *sb;
 	struct dentry *hidden_dentry;
 
-	hidden_dentry = h_dptr_i(dentry, bindex);
+	hidden_dentry = au_h_dptr_i(dentry, bindex);
 	if (unlikely(!hidden_dentry->d_inode->i_op
 		     || !hidden_dentry->d_inode->i_op->readlink))
 		return -EINVAL;
@@ -584,6 +588,23 @@ struct inode_operations aufs_symlink_iop = {
 	.follow_link	= aufs_follow_link,
 	.put_link	= aufs_put_link
 };
+
+//i_op_add.c
+int aufs_mknod(struct inode *dir, struct dentry *dentry, int mode, dev_t dev);
+int aufs_symlink(struct inode *dir, struct dentry *dentry, const char *symname);
+int aufs_create(struct inode *dir, struct dentry *dentry, int mode,
+		struct nameidata *nd);
+int aufs_link(struct dentry *src_dentry, struct inode *dir,
+	      struct dentry *dentry);
+int aufs_mkdir(struct inode *dir, struct dentry *dentry, int mode);
+
+//i_op_del.c
+int aufs_unlink(struct inode *dir, struct dentry *dentry);
+int aufs_rmdir(struct inode *dir, struct dentry *dentry);
+
+// i_op_ren.c
+int aufs_rename(struct inode *src_dir, struct dentry *src_dentry,
+		struct inode *dir, struct dentry *dentry);
 
 struct inode_operations aufs_dir_iop = {
 	.create		= aufs_create,

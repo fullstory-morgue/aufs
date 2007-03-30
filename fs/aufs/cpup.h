@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: cpup.h,v 1.12 2007/03/19 04:30:30 sfjro Exp $ */
+/* $Id: cpup.h,v 1.13 2007/03/27 12:45:47 sfjro Exp $ */
 
 #ifndef __AUFS_CPUP_H__
 #define __AUFS_CPUP_H__
@@ -26,11 +26,14 @@
 
 #ifdef __KERNEL__
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,19)
-#define cpup_attr_blksize(i, h_i)	/* */
-#else
-#define cpup_attr_blksize(i, h_i)	({(i)->i_blksize = (h_i)->i_blksize;})
+static inline
+void au_cpup_attr_blksize(struct inode *inode, struct inode *h_inode)
+{
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,19)
+	inode->i_blksize = h_inode->i_blksize;
 #endif
+}
+
 void au_cpup_attr_timesizes(struct inode *inode);
 void au_cpup_attr_nlink(struct inode *inode);
 void au_cpup_attr_changable(struct inode *inode);

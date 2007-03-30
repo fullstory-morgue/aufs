@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: cpup.c,v 1.31 2007/03/19 04:30:41 sfjro Exp $ */
+/* $Id: cpup.c,v 1.32 2007/03/27 12:51:43 sfjro Exp $ */
 
 #include <asm/uaccess.h>
 #include "aufs.h"
@@ -28,7 +28,7 @@ void au_cpup_attr_timesizes(struct inode *inode)
 
 	LKTRTrace("i%lu\n", inode->i_ino);
 	//IMustLock(inode);
-	hidden_inode = h_iptr(inode);
+	hidden_inode = au_h_iptr(inode);
 	DEBUG_ON(!hidden_inode);
 
 	inode->i_atime = hidden_inode->i_atime;
@@ -48,7 +48,7 @@ void au_cpup_attr_nlink(struct inode *inode)
 	//IMustLock(inode);
 	DEBUG_ON(!inode->i_mode);
 
-	h_inode = h_iptr(inode);
+	h_inode = au_h_iptr(inode);
 	inode->i_nlink = h_inode->i_nlink;
 
 	/*
@@ -59,7 +59,7 @@ void au_cpup_attr_nlink(struct inode *inode)
 		aufs_bindex_t bindex, bend;
 		bend = ibend(inode);
 		for (bindex = ibstart(inode) + 1; bindex <= bend; bindex++) {
-			h_inode = h_iptr_i(inode, bindex);
+			h_inode = au_h_iptr_i(inode, bindex);
 			if (h_inode)
 				au_add_nlink(inode, h_inode);
 		}
@@ -72,7 +72,7 @@ void au_cpup_attr_changable(struct inode *inode)
 
 	LKTRTrace("i%lu\n", inode->i_ino);
 	//IMustLock(inode);
-	hidden_inode = h_iptr(inode);
+	hidden_inode = au_h_iptr(inode);
 	DEBUG_ON(!hidden_inode);
 
 	inode->i_mode = hidden_inode->i_mode;
@@ -90,7 +90,7 @@ void au_cpup_attr_all(struct inode *inode)
 
 	LKTRTrace("i%lu\n", inode->i_ino);
 	//IMustLock(inode);
-	hidden_inode = h_iptr(inode);
+	hidden_inode = au_h_iptr(inode);
 	DEBUG_ON(!hidden_inode);
 
 	au_cpup_attr_changable(inode);
@@ -103,7 +103,7 @@ void au_cpup_attr_all(struct inode *inode)
 		inode->i_rdev = hidden_inode->i_rdev;
 	}
 	inode->i_blkbits = hidden_inode->i_blkbits;
-	cpup_attr_blksize(inode, hidden_inode);
+	au_cpup_attr_blksize(inode, hidden_inode);
 }
 
 /* ---------------------------------------------------------------------- */
@@ -144,9 +144,8 @@ void dtime_revert(struct dtime *dt, int h_parent_is_locked)
 	dentry = NULL;
 	if (!h_parent_is_locked /* && !IS_ROOT(dt->dt_dentry) */)
 		dentry = dt->dt_dentry;
-	//todo: fix these parameters
-	err = hidden_notify_change(dt->dt_h_dentry, &attr, dentry,
-				   need_dlgt(dt->dt_dentry->d_sb));
+	err = vfsub_notify_change(dt->dt_h_dentry, &attr,
+				  need_dlgt(dt->dt_dentry->d_sb));
 	if (unlikely(err))
 		Warn("restoring timestamps failed(%d). ignored\n", err);
 }
@@ -174,7 +173,7 @@ static int cpup_iattr(struct dentry *hidden_dst, struct dentry *hidden_src,
 	ia.ia_gid = hidden_isrc->i_gid;
 	ia.ia_atime = hidden_isrc->i_atime;
 	ia.ia_mtime = hidden_isrc->i_mtime;
-	err = hidden_notify_change(hidden_dst, &ia, NULL, dlgt);
+	err = vfsub_notify_change(hidden_dst, &ia, dlgt);
 	//if (LktrCond) err = -1;
 	if (!err)
 		hidden_idst->i_flags = hidden_isrc->i_flags; //??
@@ -227,7 +226,7 @@ static int cpup_regular(struct dentry *dentry, aufs_bindex_t bdst,
 
 	h = hidden;
 	for (i = 0; i < 2; i++, h++) {
-		h->dentry = h_dptr_i(dentry, h->bindex);
+		h->dentry = au_h_dptr_i(dentry, h->bindex);
 		DEBUG_ON(!h->dentry);
 		hidden_inode = h->dentry->d_inode;
 		DEBUG_ON(!hidden_inode || !S_ISREG(hidden_inode->i_mode));
@@ -293,7 +292,7 @@ static int cpup_entry(struct dentry *dentry, aufs_bindex_t bdst,
 	DEBUG_ON(bdst >= bsrc || test_ro(sb, bdst, NULL));
 	// bsrc branch can be ro/rw.
 
-	hidden_src = h_dptr_i(dentry, bsrc);
+	hidden_src = au_h_dptr_i(dentry, bsrc);
 	DEBUG_ON(!hidden_src);
 	hidden_inode = hidden_src->d_inode;
 	DEBUG_ON(!hidden_inode);
@@ -301,7 +300,7 @@ static int cpup_entry(struct dentry *dentry, aufs_bindex_t bdst,
 	/* stop refrencing while we are creating */
 	parent = dentry->d_parent;
 	dir = parent->d_inode;
-	hidden_dst = h_dptr_i(dentry, bdst);
+	hidden_dst = au_h_dptr_i(dentry, bdst);
 	DEBUG_ON(hidden_dst && hidden_dst->d_inode);
 	hidden_parent = hidden_dst->d_parent;
 	hidden_dir = hidden_parent->d_inode;
@@ -413,19 +412,19 @@ int cpup_single(struct dentry *dentry, aufs_bindex_t bdst, aufs_bindex_t bsrc,
 		  flags);
 	sb = dentry->d_sb;
 	DEBUG_ON(bsrc <= bdst);
-	hidden_dst = h_dptr_i(dentry, bdst);
+	hidden_dst = au_h_dptr_i(dentry, bdst);
 	DEBUG_ON(!hidden_dst || hidden_dst->d_inode);
 	hidden_dir = hidden_dst->d_parent->d_inode;
 	IMustLock(hidden_dir);
-	hidden_src = h_dptr_i(dentry, bsrc);
+	hidden_src = au_h_dptr_i(dentry, bsrc);
 	DEBUG_ON(!hidden_src || !hidden_src->d_inode);
 	inode = dentry->d_inode;
 	IiMustWriteLock(inode);
 
 	dlgt = need_dlgt(sb);
-	dst_inode = h_iptr_i(inode, bdst);
+	dst_inode = au_h_iptr_i(inode, bdst);
 	if (unlikely(dst_inode)) {
-		if (unlikely(!IS_MS(sb, MS_PLINK))) {
+		if (unlikely(!au_flag_test(sb, AuFlag_PLINK))) {
 			err = -EIO;
 			IOErr("i%lu exists on a upper branch "
 			      "but plink is disabled\n", inode->i_ino);
@@ -467,7 +466,7 @@ int cpup_single(struct dentry *dentry, aufs_bindex_t bdst, aufs_bindex_t bsrc,
 		src_inode = hidden_src->d_inode;
 		if (!isdir
 		    && src_inode->i_nlink > 1
-		    && IS_MS(sb, MS_PLINK))
+		    && au_flag_test(sb, AuFlag_PLINK))
 			append_plink(sb, inode, hidden_dst, bdst);
 		return 0; /* success */
 	}
@@ -516,7 +515,7 @@ int sio_cpup_single(struct dentry *dentry, aufs_bindex_t bdst,
 		  DLNPair(dentry), dentry->d_inode->i_ino, bdst, bsrc, len,
 		  flags);
 
-	hidden_dentry = h_dptr_i(dentry, bsrc);
+	hidden_dentry = au_h_dptr_i(dentry, bsrc);
 	mode = hidden_dentry->d_inode->i_mode & S_IFMT;
 	if ((mode != S_IFCHR && mode != S_IFBLK)
 	    || capable(CAP_MKNOD))
@@ -555,9 +554,9 @@ int cpup_simple(struct dentry *dentry, aufs_bindex_t bdst, loff_t len,
 
 	bend = dbend(dentry);
 	for (bsrc = bdst + 1; bsrc <= bend; bsrc++)
-		if (h_dptr_i(dentry, bsrc))
+		if (au_h_dptr_i(dentry, bsrc))
 			break;
-	DEBUG_ON(!h_dptr_i(dentry, bsrc));
+	DEBUG_ON(!au_h_dptr_i(dentry, bsrc));
 
 	err = lkup_neg(dentry, bdst);
 	//err = -1;
@@ -599,7 +598,7 @@ int sio_cpup_simple(struct dentry *dentry, aufs_bindex_t bdst, loff_t len,
 		  DLNPair(dentry), bdst, len, flags);
 
 	dir = dentry->d_parent->d_inode;
-	hidden_dir = h_iptr_i(dir, bdst);
+	hidden_dir = au_h_iptr_i(dir, bdst);
 	dlgt = need_dlgt(dir->i_sb);
 	do_sio = au_test_perm(hidden_dir, MAY_EXEC | MAY_WRITE, dlgt);
 	if (!do_sio) {
@@ -647,10 +646,10 @@ int cpup_dirs(struct dentry *dentry, aufs_bindex_t bdst, struct dentry *locked)
 
 	/* slow loop, keep it simple and stupid */
 	err = 0;
-	udba = IS_MS(sb, MS_UDBA_INOTIFY);
+	udba = au_flag_test(sb, AuFlag_UDBA_INOTIFY);
 	while (1) {
 		parent = dentry->d_parent; // dget_parent()
-		hidden_parent = h_dptr_i(parent, bdst);
+		hidden_parent = au_h_dptr_i(parent, bdst);
 		if (hidden_parent)
 			return 0; /* success */
 
@@ -660,7 +659,7 @@ int cpup_dirs(struct dentry *dentry, aufs_bindex_t bdst, struct dentry *locked)
 			parent = d->d_parent; // dget_parent()
 			if (parent != locked)
 				di_read_lock_parent3(parent, !AUFS_I_RLOCK);
-			hidden_parent = h_dptr_i(parent, bdst);
+			hidden_parent = au_h_dptr_i(parent, bdst);
 			if (parent != locked)
 				di_read_unlock(parent, !AUFS_I_RLOCK);
 		} while (!hidden_parent);
@@ -669,12 +668,12 @@ int cpup_dirs(struct dentry *dentry, aufs_bindex_t bdst, struct dentry *locked)
 			di_write_lock_child3(d);
 
 		/* somebody else might create while we were sleeping */
-		if (!h_dptr_i(d, bdst) || !h_dptr_i(d, bdst)->d_inode) {
+		if (!au_h_dptr_i(d, bdst) || !au_h_dptr_i(d, bdst)->d_inode) {
 			struct inode *h_dir = hidden_parent->d_inode,
 				*dir = parent->d_inode,
 				*h_gdir, *gdir;
 
-			if (h_dptr_i(d, bdst))
+			if (au_h_dptr_i(d, bdst))
 				au_update_dbstart(d);
 			//DEBUG_ON(dbstart(d) <= bdst);
 			if (parent != locked)
@@ -721,13 +720,13 @@ int test_and_cpup_dirs(struct dentry *dentry, aufs_bindex_t bdst,
 	DiMustReadLock(parent);
 	IiMustReadLock(dir);
 
-	if (h_iptr_i(dir, bdst))
+	if (au_h_iptr_i(dir, bdst))
 		return 0;
 
 	err = 0;
 	di_read_unlock(parent, AUFS_I_RLOCK);
 	di_write_lock_parent(parent);
-	if (h_iptr_i(dir, bdst))
+	if (au_h_iptr_i(dir, bdst))
 		goto out;
 
 	err = cpup_dirs(dentry, bdst, locked);

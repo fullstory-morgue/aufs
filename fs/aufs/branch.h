@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: branch.h,v 1.25 2007/03/19 04:30:30 sfjro Exp $ */
+/* $Id: branch.h,v 1.26 2007/03/27 12:45:36 sfjro Exp $ */
 
 #ifndef __AUFS_BRANCH_H__
 #define __AUFS_BRANCH_H__
@@ -25,6 +25,7 @@
 #include <linux/mount.h>
 #include <linux/aufs_type.h>
 #include "misc.h"
+#include "super.h"
 
 #ifdef __KERNEL__
 
@@ -34,10 +35,9 @@ struct aufs_branch {
 	readf_t			br_xino_read;
 	writef_t		br_xino_write;
 
-	//unsigned int		br_id;
 	aufs_bindex_t		br_id;
 
-	unsigned int		br_perm;
+	int			br_perm;
 	struct vfsmount		*br_mnt;
 	atomic_t		br_count;
 
@@ -50,63 +50,28 @@ struct aufs_branch {
 	struct dentry		*br_plink;
 };
 
-#define br_count(br)		atomic_read(&(br)->br_count)
-#define br_get(br)		atomic_inc(&(br)->br_count)
-#define br_put(br)		atomic_dec(&(br)->br_count)
-
-/* Superblock to branch */
-#define sbr_id(sb, bindex)	({stobr(sb, bindex)->br_id;})
-#define sbr_mnt(sb, bindex)	({stobr(sb, bindex)->br_mnt;})
-#define sbr_sb(sb, bindex)	({sbr_mnt(sb, bindex)->mnt_sb;})
-#define sbr_count(sb, bindex)	br_count(stobr(sb, bindex))
-#define sbr_get(sb, bindex)	br_get(stobr(sb, bindex))
-#define sbr_put(sb, bindex)	br_put(stobr(sb, bindex))
-#define sbr_perm(sb, bindex) 	({stobr(sb, bindex)->br_perm;})
-#define sbr_perm_str(sb, bindex, str, len) \
-	br_perm_str(str, len, stobr(sb, bindex)->br_perm)
-
-#define br_wh_read_lock(br)	rw_read_lock(&(br)->br_wh_rwsem, AUFS_LSC_BR_WH)
-#define br_wh_read_unlock(br)	rw_read_unlock(&(br)->br_wh_rwsem)
-#define br_wh_write_lock(br) \
-	rw_write_lock(&(br)->br_wh_rwsem, AUFS_LSC_BR_WH)
-#define br_wh_write_unlock(br)	rw_write_unlock(&(br)->br_wh_rwsem)
-
-/* debug macro. use with caution */
-#define BrWhMustReadLock(br)	do { \
-	/* SiMustAnyLock(sb); */ \
-	RwMustReadLock(&(br)->br_wh_rwsem); \
-	} while(0)
-#define BrWhMustWriteLock(br)	do { \
-	/* SiMustAnyLock(sb); */ \
-	RwMustWriteLock(&(br)->br_wh_rwsem); \
-	} while(0)
-#define BrWhMustAnyLock(br)	do { \
-	/* SiMustAnyLock(sb); */ \
-	RwMustAnyLock(&(br)->br_wh_rwsem); \
-	} while(0)
-
 /* ---------------------------------------------------------------------- */
-/* branch permission flags */
-/*
- * WH: whiteout may exist on readonly branch.
- * RR: natively readonly branch, isofs, squashfs, etc.
- */
-#define AufsBrpermBase		MAY_APPEND /* last defined in linux/fs.h */
-#define AUFS_MAY_WH		(AufsBrpermBase << 1)
-#define AUFS_MAY_RR		(AufsBrpermBase << 2)
 
-#define AUFS_BRPERM_MASK	(MAY_WRITE | MAY_READ | AUFS_MAY_WH | AUFS_MAY_RR)
+/* branch permissions */
+enum {
+	AuBrPerm_RW = 1,	/* writable branch */
+	AuBrPerm_RO,		/* readonly and no whiteout branch */
+	AuBrPerm_ROWH,		/* whiteout may exist on readonly branch */
+	AuBrPerm_RR,		/* natively readonly and no whiteout branch */
+	AuBrPerm_RRWH,	/* whiteout may exist on natively readonly branch */
+	AuBrPerm_Last
+};
 
 /* ---------------------------------------------------------------------- */
 
-#define _AufsNoNfsBranchMsg "NFS branch is not supported"
+#define _AuNoNfsBranchMsg "NFS branch is not supported"
 #if LINUX_VERSION_CODE == KERNEL_VERSION(2,6,15)
-#define AufsNoNfsBranch
-#define AufsNoNfsBranchMsg _AufsNoNfsBranchMsg
+#define AuNoNfsBranch
+#define AuNoNfsBranchMsg _AuNoNfsBranchMsg
 #elif LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,19) \
 	&& !defined(CONFIG_AUFS_LHASH_PATCH)
-#define AufsNoNfsBranch
-#define AufsNoNfsBranchMsg _AufsNoNfsBranchMsg \
+#define AuNoNfsBranch
+#define AuNoNfsBranchMsg _AuNoNfsBranchMsg \
 	", try lhash.patch and CONFIG_AUFS_LHASH_PATCH"
 #endif
 
@@ -124,6 +89,146 @@ struct opt_del;
 int br_del(struct super_block *sb, struct opt_del *del, int remount);
 struct opt_mod;
 int br_mod(struct super_block *sb, struct opt_mod *mod, int remount);
+
+/* ---------------------------------------------------------------------- */
+
+static inline int br_count(struct aufs_branch *br)
+{
+	return atomic_read(&br->br_count);
+}
+
+static inline void br_get(struct aufs_branch *br)
+{
+	atomic_inc(&br->br_count);
+}
+
+static inline void br_put(struct aufs_branch *br)
+{
+	atomic_dec(&br->br_count);
+}
+
+/* ---------------------------------------------------------------------- */
+
+/* Superblock to branch */
+static inline aufs_bindex_t sbr_id(struct super_block *sb, aufs_bindex_t bindex)
+{
+	return stobr(sb, bindex)->br_id;
+}
+
+static inline
+struct vfsmount *sbr_mnt(struct super_block *sb, aufs_bindex_t bindex)
+{
+	return stobr(sb, bindex)->br_mnt;
+}
+
+static inline
+struct super_block *sbr_sb(struct super_block *sb, aufs_bindex_t bindex)
+{
+	return sbr_mnt(sb, bindex)->mnt_sb;
+}
+
+#if 0
+static inline int sbr_count(struct super_block *sb, aufs_bindex_t bindex)
+{
+	return br_count(stobr(sb, bindex));
+}
+
+static inline void sbr_get(struct super_block *sb, aufs_bindex_t bindex)
+{
+	br_get(stobr(sb, bindex));
+}
+#endif
+
+static inline void sbr_put(struct super_block *sb, aufs_bindex_t bindex)
+{
+	br_put(stobr(sb, bindex));
+}
+
+static inline int sbr_perm(struct super_block *sb, aufs_bindex_t bindex)
+{
+	return stobr(sb, bindex)->br_perm;
+}
+
+static inline int au_is_whable(int perm)
+{
+	return (perm == AuBrPerm_RW
+		|| perm == AuBrPerm_ROWH
+		|| perm == AuBrPerm_RRWH);
+}
+
+static inline int sbr_is_whable(struct super_block *sb, aufs_bindex_t bindex)
+{
+	return au_is_whable(sbr_perm(sb, bindex));
+}
+
+/* ---------------------------------------------------------------------- */
+
+#ifdef CONFIG_AUFS_LHASH_PATCH
+static inline struct vfsmount *au_do_nfsmnt(struct vfsmount *h_mnt)
+{
+	if (!au_is_nfs(h_mnt->mnt_sb))
+		return NULL;
+	return h_mnt;
+}
+
+/* it doesn't mntget() */
+static inline
+struct vfsmount *au_nfsmnt(struct super_block *sb, aufs_bindex_t bindex)
+{
+	return au_do_nfsmnt(sbr_mnt(sb, bindex));
+}
+#else
+static inline struct vfsmount *au_do_nfsmnt(struct vfsmount *h_mnt)
+{
+	return NULL;
+}
+
+static inline
+struct vfsmount *au_nfsmnt(struct super_block *sb, aufs_bindex_t bindex)
+{
+	return NULL;
+}
+#endif /* CONFIG_AUFS_LHASH_PATCH */
+
+/* ---------------------------------------------------------------------- */
+
+static inline void br_wh_read_lock(struct aufs_branch *br)
+{
+	rw_read_lock(&br->br_wh_rwsem);
+}
+
+static inline void br_wh_read_unlock(struct aufs_branch *br)
+{
+	rw_read_unlock(&br->br_wh_rwsem);
+}
+
+static inline void br_wh_write_lock(struct aufs_branch *br)
+{
+	rw_write_lock(&br->br_wh_rwsem);
+}
+
+static inline void br_wh_write_unlock(struct aufs_branch *br)
+{
+	rw_write_unlock(&br->br_wh_rwsem);
+}
+
+static inline void BrWhMustReadLock(struct aufs_branch *br)
+{
+	/* SiMustAnyLock(sb); */
+	RwMustReadLock(&br->br_wh_rwsem);
+}
+
+static inline void BrWhMustWriteLock(struct aufs_branch *br)
+{
+	/* SiMustAnyLock(sb); */
+	RwMustWriteLock(&br->br_wh_rwsem);
+}
+
+static inline void BrWhMustAnyLock(struct aufs_branch *br)
+{
+	/* SiMustAnyLock(sb); */
+	RwMustAnyLock(&br->br_wh_rwsem);
+}
 
 #endif /* __KERNEL__ */
 #endif /* __AUFS_BRANCH_H__ */

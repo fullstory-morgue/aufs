@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: vfsub.h,v 1.3 2007/03/19 04:33:28 sfjro Exp $ */
+/* $Id: vfsub.h,v 1.4 2007/03/27 12:48:16 sfjro Exp $ */
 
 #ifndef __AUFS_VFSUB_H__
 #define __AUFS_VFSUB_H__
@@ -106,8 +106,7 @@ int do_vfsub_mkdir(struct inode *dir, struct dentry *dentry, int mode)
 	return vfs_mkdir(dir, dentry, mode);
 }
 
-static inline
-int do_vfsub_rmdir(struct inode *dir, struct dentry *dentry)
+static inline int do_vfsub_rmdir(struct inode *dir, struct dentry *dentry)
 {
 	int err;
 	lockdep_off();
@@ -119,25 +118,14 @@ int do_vfsub_rmdir(struct inode *dir, struct dentry *dentry)
 /* ---------------------------------------------------------------------- */
 
 static inline
-int do_vfsub_notify_change(struct dentry *dentry, struct iattr *ia)
-{
-	int err;
-	lockdep_off();
-	err = notify_change(dentry, ia);
-	lockdep_on();
-	return err;
-}
-
-/* ---------------------------------------------------------------------- */
-
-static inline
 ssize_t do_vfsub_read_u(struct file *file, char __user *ubuf, size_t count,
 			loff_t *ppos)
 {
 	ssize_t err;
-	//lockdep_off();
+	// nfs uses some locks
+	lockdep_off();
 	err = vfs_read(file, ubuf, count, ppos);
-	//lockdep_on();
+	lockdep_on();
 	return err;
 }
 
@@ -192,8 +180,7 @@ int do_vfsub_readdir(struct file *file, filldir_t filldir, void *arg)
 
 /* ---------------------------------------------------------------------- */
 
-static inline
-loff_t vfsub_llseek(struct file *file, loff_t offset, int origin)
+static inline loff_t vfsub_llseek(struct file *file, loff_t offset, int origin)
 {
 	loff_t err;
 	lockdep_off();
@@ -205,7 +192,10 @@ loff_t vfsub_llseek(struct file *file, loff_t offset, int origin)
 /* ---------------------------------------------------------------------- */
 
 #ifdef CONFIG_AUFS_DLGT
-#define need_dlgt(sb)	(IS_MS(sb, MS_DLGT) && !is_kthread(current))
+static inline int need_dlgt(struct super_block *sb)
+{
+	return au_flag_test(sb, AuFlag_DLGT) && !au_is_kthread(current);
+}
 
 int vfsub_permission(struct inode *inode, int mask, struct nameidata *nd,
 		     int dlgt);
@@ -220,11 +210,8 @@ int vfsub_link(struct dentry *src_dentry, struct inode *dir,
 	       struct dentry *dentry, int dlgt);
 int vfsub_rename(struct inode *src_dir, struct dentry *src_dentry,
 		 struct inode *dir, struct dentry *dentry, int dlgt);
-int vfsub_mkdir(struct inode *dir, struct dentry *dentry, int mode,
-		int dlgt);
+int vfsub_mkdir(struct inode *dir, struct dentry *dentry, int mode, int dlgt);
 int vfsub_rmdir(struct inode *dir, struct dentry *dentry, int dlgt);
-
-int vfsub_notify_change(struct dentry *dentry, struct iattr *ia, int dlgt);
 
 ssize_t vfsub_read_u(struct file *file, char __user *ubuf, size_t count,
 		     loff_t *ppos, int dlgt);
@@ -238,39 +225,99 @@ int vfsub_readdir(struct file *file, filldir_t filldir, void *arg, int dlgt);
 
 #else
 
-#define need_dlgt(sb)	0
+static inline int need_dlgt(struct super_block *sb)
+{
+	return 0;
+}
 
-#define vfsub_permission(inode, mask, nd, dlgt) \
-	do_vfsub_permission(inode, mask, nd)
+static inline
+int vfsub_permission(struct inode *inode, int mask, struct nameidata *nd,
+		     int dlgt)
+{
+	return do_vfsub_permission(inode, mask, nd);
+}
 
-#define vfsub_create(dir, dentry, mode, nd, dlgt) \
-	do_vfsub_create(dir, dentry, mode, nd)
-#define vfsub_symlink(dir, dentry, symname, mode, dlgt) \
-	do_vfsub_symlink(dir, dentry, symname, mode)
-#define vfsub_mknod(dir, dentry, mode, dev, dlgt) \
-	do_vfsub_mknod(dir, dentry, mode, dev)
-#define vfsub_mkdir(dir, dentry, mode, dlgt) \
-	do_vfsub_mkdir(dir, dentry, mode)
-#define vfsub_link(src_dentry, dir, dentry, dlgt) \
-	do_vfsub_link(src_dentry, dir, dentry)
-#define vfsub_rename(src_dir, src_dentry, dir, dentry, dlgt) \
-	do_vfsub_rename(src_dir, src_dentry, dir, dentry)
-#define vfsub_rmdir(dir, dentry, dlgt) \
-	do_vfsub_rmdir(dir, dentry)
+static inline
+int vfsub_create(struct inode *dir, struct dentry *dentry, int mode,
+		 struct nameidata *nd, int dlgt)
+{
+	return do_vfsub_create(dir, dentry, mode, nd);
+}
 
-#define vfsub_notify_change(dentry, ia, dlgt) \
-	do_vfsub_notify_change(dentry, ia)
+static inline
+int vfsub_symlink(struct inode *dir, struct dentry *dentry, const char *symname,
+		  int mode, int dlgt)
+{
+	return do_vfsub_symlink(dir, dentry, symname, mode);
+}
 
-#define vfsub_read_u(file, ubuf, count, ppos, dlgt) \
-	do_vfsub_read_u(file, ubuf, count, ppos)
-#define vfsub_read_k(file, kbuf, count, ppos, dlgt) \
-	do_vfsub_read_k(file, kbuf, count, ppos)
-#define vfsub_write_u(file, ubuf, count, ppos, dlgt) \
-	do_vfsub_write_u(file, ubuf, count, ppos)
-#define vfsub_write_k(file, kbuf, count, ppos, dlgt) \
-	do_vfsub_write_k(file, kbuf, count, ppos)
-#define vfsub_readdir(file, filldir, arg, dlgt) \
-	do_vfsub_readdir(file, filldir, arg)
+static inline
+int vfsub_mknod(struct inode *dir, struct dentry *dentry, int mode, dev_t dev,
+		int dlgt)
+{
+	return do_vfsub_mknod(dir, dentry, mode, dev);
+}
+
+static inline
+int vfsub_link(struct dentry *src_dentry, struct inode *dir,
+	       struct dentry *dentry, int dlgt)
+{
+	return do_vfsub_link(src_dentry, dir, dentry);
+}
+
+static inline
+int vfsub_rename(struct inode *src_dir, struct dentry *src_dentry,
+		 struct inode *dir, struct dentry *dentry, int dlgt)
+{
+	return do_vfsub_rename(src_dir, src_dentry, dir, dentry);
+}
+
+static inline
+int vfsub_mkdir(struct inode *dir, struct dentry *dentry, int mode,
+		int dlgt)
+{
+	return do_vfsub_mkdir(dir, dentry, mode);
+}
+
+static inline
+int vfsub_rmdir(struct inode *dir, struct dentry *dentry, int dlgt)
+{
+	return do_vfsub_rmdir(dir, dentry);
+}
+
+static inline
+ssize_t vfsub_read_u(struct file *file, char __user *ubuf, size_t count,
+		     loff_t *ppos, int dlgt)
+{
+	return do_vfsub_read_u(file, ubuf, count, ppos);
+}
+
+static inline
+ssize_t vfsub_read_k(struct file *file, void *kbuf, size_t count, loff_t *ppos,
+		     int dlgt)
+{
+	return do_vfsub_read_k(file, kbuf, count, ppos);
+}
+
+static inline
+ssize_t vfsub_write_u(struct file *file, const char __user *ubuf, size_t count,
+		      loff_t *ppos, int dlgt)
+{
+	return do_vfsub_write_u(file, ubuf, count, ppos);
+}
+
+static inline
+ssize_t vfsub_write_k(struct file *file, void *kbuf, size_t count, loff_t *ppos,
+		      int dlgt)
+{
+	return do_vfsub_write_k(file, kbuf, count, ppos);
+}
+
+static inline
+int vfsub_readdir(struct file *file, filldir_t filldir, void *arg, int dlgt)
+{
+	return do_vfsub_readdir(file, filldir, arg);
+}
 #endif /* CONFIG_AUFS_DLGT */
 
 /* ---------------------------------------------------------------------- */
@@ -294,6 +341,7 @@ static inline void vfsub_unlock_rename(struct dentry *d1, struct dentry *d2)
 
 /* ---------------------------------------------------------------------- */
 
+int vfsub_notify_change(struct dentry *dentry, struct iattr *ia, int dlgt);
 int vfsub_unlink(struct inode *dir, struct dentry *dentry, int dlgt);
 int vfsub_statfs(void *arg, struct kstatfs *buf, int dlgt);
 

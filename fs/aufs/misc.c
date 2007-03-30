@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: misc.c,v 1.27 2007/03/19 04:33:05 sfjro Exp $ */
+/* $Id: misc.c,v 1.28 2007/03/27 12:49:40 sfjro Exp $ */
 
 //#include <linux/fs.h>
 //#include <linux/namei.h>
@@ -24,42 +24,7 @@
 //#include <asm/uaccess.h>
 #include "aufs.h"
 
-// todo: remove this
-int hidden_notify_change(struct dentry *hidden_dentry, struct iattr *ia,
-			 struct dentry *dentry, int dlgt)
-{
-	int err;
-	struct inode *hidden_inode;
-
-	LKTRTrace("%.*s, ia_valid 0x%x, dentry %p\n",
-		  DLNPair(hidden_dentry), ia->ia_valid, dentry);
-	hidden_inode = hidden_dentry->d_inode;
-	IMustLock(hidden_inode);
-
-	err = -EPERM;
-	if (!IS_IMMUTABLE(hidden_inode) && !IS_APPEND(hidden_inode)) {
-		err = vfsub_notify_change(hidden_dentry, ia, dlgt);
-		//err = -1;
-#if 0 // todo: remove this
-		if (unlikely(!err && dentry
-			     && (ia->ia_valid & ~(ATTR_ATIME | ATTR_ATIME_SET))
-			     && IS_MS(dentry->d_sb, MS_UDBA_INOTIFY))) {
-			struct dentry *parent = dentry->d_parent;
-			//dump_stack();
-			// root is handled in aufs_hinotify().
-			if (!IS_ROOT(dentry) && S_ISDIR(hidden_inode->i_mode))
-				direval_dec(dentry);
-			// parent is notified too.
-			if (!IS_ROOT(parent))
-				direval_dec(parent);
-		}
-#endif
-	}
-	TraceErr(err);
-	return err;
-}
-
-void *kzrealloc(void *p, int nused, int new_sz)
+void *au_kzrealloc(void *p, int nused, int new_sz)
 {
 	void *q;
 
@@ -102,7 +67,7 @@ struct nameidata *fake_dm(struct nameidata *fake_nd, struct nameidata *nd,
 	DiMustAnyLock(nd->dentry);
 
 	if (bindex <= dbend(nd->dentry))
-		fake_nd->dentry = h_dptr_i(nd->dentry, bindex);
+		fake_nd->dentry = au_h_dptr_i(nd->dentry, bindex);
 	if (fake_nd->dentry) {
 		dget(fake_nd->dentry);
 		fake_nd->mnt = sbr_mnt(sb, bindex);
@@ -153,7 +118,6 @@ int au_copy_file(struct file *dst, struct file *src, loff_t len,
 	dlgt = need_dlgt(sb);
 	err = all_zero = 0;
 	dst->f_pos = src->f_pos = 0;
-	//smp_mb();
 	while (len) {
 		size_t sz, rbytes, wbytes;
 		char *p;
@@ -241,7 +205,7 @@ int test_ro(struct super_block *sb, aufs_bindex_t bindex, struct inode *inode)
 
 	err = br_rdonly(stobr(sb, bindex));
 	if (!err && inode) {
-		struct inode *hi = h_iptr_i(inode, bindex);
+		struct inode *hi = au_h_iptr_i(inode, bindex);
 		if (hi)
 			err = IS_IMMUTABLE(hi) ? -EROFS : 0;
 	}
@@ -252,7 +216,7 @@ int au_test_perm(struct inode *hidden_inode, int mask, int dlgt)
 {
 	if (!current->fsuid)
 		return 0;
-	if (unlikely(SB_NFS(hidden_inode->i_sb)
+	if (unlikely(au_is_nfs(hidden_inode->i_sb)
 		     && (mask & MAY_WRITE)
 		     && S_ISDIR(hidden_inode->i_mode)))
 		mask |= MAY_READ; /* force permission check */

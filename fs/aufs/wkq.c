@@ -16,79 +16,61 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: wkq.c,v 1.7 2007/03/19 04:32:35 sfjro Exp $ */
-
-/*
- * Occasionally aufs needs to get superuser privilege to access branches,
- * which is called 'superio' locally.
- * Anciently, aufs changed 'current->fsuid' to zero temporary with disabling
- * some capabilities (CAP_xxx). It runs fast, but had minor limitations around
- * disabled capabilities.
- * Now I decided to separate superio as a kernel thread.
- * It may be slower than ancient simple approach in some cases (rare),
- * and it may meet some system limitation in other cases (very rare),
- * but it gives no limitation to user processes.
- *
- * "create a thread every time" .vs. "thread pool", to implement superio.
- *
- * - create a short life thread every time when superio is needed
- * - wait for the completion of the superio thread
- * - the request to create the superio thread is handled by the thread 'kthread'
- * or
- * - prepare one or a few superio threads, as residential thread pool
- * - enqueue the superio request to the threads
- * - wait for the thread returns our result
- *
- * currently thread pool is chosen.
- */
+/* $Id: wkq.c,v 1.8 2007/03/27 12:50:54 sfjro Exp $ */
 
 #include <linux/kthread.h>
 #include "aufs.h"
 
-static struct workqueue_struct **wkq;
-static atomic_t wkq_last = ATOMIC_INIT(0);
+struct au_wkq *au_wkq;
 
-struct aufs_cred {
+struct au_cred {
+#ifdef CONFIG_AUFS_DLGT
 	uid_t fsuid;
-	//gid_t fsgid;
+	gid_t fsgid;
 	kernel_cap_t cap_effective, cap_inheritable, cap_permitted;
 	//unsigned keep_capabilities:1;
 	//struct user_struct *user;
 	//struct fs_struct *fs;
 	//struct nsproxy *nsproxy;
-
+#endif
 };
 
-struct aufs_wkinfo {
-	struct completion comp;
+struct au_wkinfo {
 	struct work_struct wk;
-	aufs_wkq_func_t func;
-	void *args;
+
 	int dlgt; // can be a bit
-	struct aufs_cred cred;
+	struct au_cred cred;
+
+	au_wkq_func_t func;
+	void *args;
+
+	atomic_t *busyp;
+	struct completion *comp;
 };
 
 /* ---------------------------------------------------------------------- */
 
 #ifdef CONFIG_AUFS_DLGT
-static void cred_store(struct aufs_cred *cred)
+static void cred_store(struct au_cred *cred)
 {
 	cred->fsuid = current->fsuid;
+	cred->fsgid = current->fsgid;
 	cred->cap_effective = current->cap_effective;
 	cred->cap_inheritable = current->cap_inheritable;
 	cred->cap_permitted = current->cap_permitted;
 }
 
-static void cred_revert(struct aufs_cred *cred)
+static void cred_revert(struct au_cred *cred)
 {
-	DEBUG_ON(!is_kthread(current));
+	DEBUG_ON(!au_is_kthread(current));
 	current->fsuid = cred->fsuid;
+	current->fsgid = cred->fsgid;
 	current->cap_effective = cred->cap_effective;
 	current->cap_inheritable = cred->cap_inheritable;
 	current->cap_permitted = cred->cap_permitted;
 }
 
-static void cred_switch(struct aufs_cred *old, struct aufs_cred *new)
+static void cred_switch(struct au_cred *old, struct au_cred *new)
 {
 	cred_store(old);
 	cred_revert(new);
@@ -97,33 +79,59 @@ static void cred_switch(struct aufs_cred *old, struct aufs_cred *new)
 
 /* ---------------------------------------------------------------------- */
 
-static void do_wkq(struct work_struct *wk)
+static int enqueue(struct au_wkq *wkq, struct au_wkinfo *wkinfo)
 {
-	unsigned int idx;
+	unsigned int v, cur;
+
+	wkinfo->busyp = &wkq->busy;
+	v = atomic_read(wkinfo->busyp);
+	cur = wkq->max_busy;
+	if (unlikely(cur < v))
+		(void)cmpxchg(&wkq->max_busy, cur, v);
+	return !queue_work(wkq->q, &wkinfo->wk);
+}
+
+static void do_wkq(struct au_wkinfo *wkinfo)
+{
+	unsigned int idle, n;
+	int i, idle_idx;
 
 	TraceEnter();
 
-	// todo: busy thread bitmap and find_first_bit()
-	// lazy round-robin
-	//smp_mb();
 	while (1) {
-		idx = atomic_inc_return(&wkq_last);
-		idx %= aufs_nwkq;
-		if (queue_work(wkq[idx], wk))
-			break;
-		Warn("failed to queue_work()\n");
+		idle_idx = 0;
+		idle = UINT_MAX;
+		for (i = 0; i < aufs_nwkq; i++) {
+			n = atomic_inc_return(&au_wkq[i].busy);
+			if (n == 1 && !enqueue(au_wkq + i, wkinfo))
+				return; /* success */
+
+			if (n < idle) {
+				idle_idx = i;
+				idle = n;
+			}
+			atomic_dec(&au_wkq[i].busy);
+		}
+
+		atomic_inc(&au_wkq[idle_idx].busy);
+		if (!enqueue(au_wkq + idle_idx, wkinfo))
+			return; /* success */
+
+		/* impossible? */
+		Warn1("failed to queue_work()\n");
+		yield();
 	}
 }
 
-static AufsWkqFunc(wkq_func, wk)
+static AuWkqFunc(wkq_func, wk)
 {
-	struct aufs_wkinfo *wkinfo = container_of(wk, struct aufs_wkinfo, wk);
+	struct au_wkinfo *wkinfo = container_of(wk, struct au_wkinfo, wk);
 
 #ifdef CONFIG_AUFS_DLGT
 	if (!wkinfo->dlgt)
 		wkinfo->func(wkinfo->args);
 	else {
-		struct aufs_cred cred;
+		struct au_cred cred;
 		cred_switch(&cred, &wkinfo->cred);
 		wkinfo->func(wkinfo->args);
 		cred_revert(&cred);
@@ -131,28 +139,30 @@ static AufsWkqFunc(wkq_func, wk)
 #else
 	wkinfo->func(wkinfo->args);
 #endif
-	complete(&wkinfo->comp);
+	atomic_dec(wkinfo->busyp);
+	complete(wkinfo->comp);
 }
 
-void wkq_wait(aufs_wkq_func_t func, void *args, int dlgt)
+void wkq_wait(au_wkq_func_t func, void *args, int dlgt)
 {
-	struct aufs_wkinfo wkinfo = {
+	DECLARE_COMPLETION_ONSTACK(comp);
+	struct au_wkinfo wkinfo = {
+		.dlgt	= dlgt,
 		.func	= func,
 		.args	= args,
-		.dlgt	= dlgt
+		.comp	= &comp
 	};
 
 	LKTRTrace("dlgt %d\n", dlgt);
-	DEBUG_ON(is_kthread(current));
+	DEBUG_ON(au_is_kthread(current));
 
-	AufsInitWkq(&wkinfo.wk, wkq_func);
-	init_completion(&wkinfo.comp);
+	AuInitWkq(&wkinfo.wk, wkq_func);
 #ifdef CONFIG_AUFS_DLGT
 	if (dlgt)
 		cred_store(&wkinfo.cred);
 #endif
-	do_wkq(&wkinfo.wk);
-	wait_for_completion(&wkinfo.comp);
+	do_wkq(&wkinfo);
+	wait_for_completion(wkinfo.comp);
 }
 
 void au_fin_wkq(void)
@@ -162,9 +172,9 @@ void au_fin_wkq(void)
 	TraceEnter();
 
 	for (i = 0; i < aufs_nwkq; i++)
-		if (wkq[i] && !IS_ERR(wkq[i]))
-			destroy_workqueue(wkq[i]);
-	kfree(wkq);
+		if (au_wkq[i].q && !IS_ERR(au_wkq[i].q))
+			destroy_workqueue(au_wkq[i].q);
+	kfree(au_wkq);
 }
 
 int __init au_init_wkq(void)
@@ -174,17 +184,20 @@ int __init au_init_wkq(void)
 	LKTRTrace("%d\n", aufs_nwkq);
 
 	err = -ENOMEM;
-	wkq = kcalloc(aufs_nwkq, sizeof(*wkq), GFP_KERNEL);
-	if (unlikely(!wkq))
+	au_wkq = kcalloc(aufs_nwkq, sizeof(*au_wkq), GFP_KERNEL);
+	if (unlikely(!au_wkq))
 		goto out;
 
 	err = 0;
 	for (i = 0; i < aufs_nwkq; i++) {
-		wkq[i] = create_singlethread_workqueue(AUFS_WKQ_NAME);
-		if (wkq[i] && !IS_ERR(wkq[i]))
+		au_wkq[i].q = create_singlethread_workqueue(AUFS_WKQ_NAME);
+		if (au_wkq[i].q && !IS_ERR(au_wkq[i].q)) {
+			atomic_set(&au_wkq[i].busy, 0);
+			au_wkq[i].max_busy = 0;
 			continue;
+		}
 
-		err = PTR_ERR(wkq[i]);
+		err = PTR_ERR(au_wkq[i].q);
 		au_fin_wkq();
 		break;
 	}

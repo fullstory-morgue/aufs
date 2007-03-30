@@ -12,7 +12,7 @@ In the early days, aufs was entirely re-designed and re-implemented
 Unionfs Version 1.x series. After
 many original ideas, approaches and improvements, it
 becomes totally different from Unionfs while keeping the basic features.
-See Unionfs for the basic features.
+See Unionfs Version 1.x series for the basic features.
 
 .\" ----------------------------------------------------------------------
 .SH MOUNT OPTIONS
@@ -149,10 +149,12 @@ Specifies whether mkdir(2) and rename(2) dir case make the created directory
 'opaque' or not.
 In other words, to create '\*[AUFS_WH_DIROPQ]' under the created or renamed
 directory, or not to create.
-When you specify diropq=w or =whiteouted, aufs will not create it if the
+When you specify diropq=w or diropq=whiteouted, aufs will not create
+it if the
 directory was not whiteouted or opaqued. If the directory was whiteouted
 or opaqued, the created or renamed directory will be opaque.
-When you specify diropq=a or =always, aufs will always create it regardless
+When you specify diropq=a or diropq==always, aufs will always create
+it regardless
 the directory was whiteouted/opaqued or not.
 The default value is diropq=w, it means not to create when it is unnecessary.
 If you define CONFIG_AUFS_COMPAT at aufs compiling time, the default will be
@@ -187,13 +189,13 @@ branch. The default is warn_perm (cf. DIAGNOSTICS).
 .\" The behaviour is highly depending upon your security module and its
 .\" configuration.
 .\" 
-.\" If you don't want your application to access your branches or to be
-.\" traced strictly by task I/O accounting, you can
+.\" If you don't want your application to access branches though aufs or
+.\" to be traced strictly by task I/O accounting, you can
 .\" use the kernel threads in aufs. If you enable CONFIG_AUFS_DLGT and
 .\" specify 'dlgt' mount option, then
 .\" aufs delegates its internal
-.\" access to the branches to the kernel threads and your LSM will see the
-.\" aufs kernel thread is accessing ot the aufs branch instead of your
+.\" access to the branches to the kernel threads, and your LSM will see the
+.\" aufs kernel threads access to the branch instead of your
 .\" application.
 .\" 
 .\" The delegation may damage the performance since it includes
@@ -216,7 +218,8 @@ and handle the special I/O requests from aufs.
 The default value is \*[AUFS_NWKQ_DEF].
 
 The special I/O requests from aufs include a part of copy-up, lookup,
-directory handling, pseudo-link and xino file operations.
+directory handling, pseudo-link, xino file operations and the
+delegated access to branches.
 For example, Unix filesystems allow you to rmdir(2) which has no write
 permission bit, if its parent directory has write permission bit. In aufs, the
 removing directory may or may not have whiteout or 'dir opaque' mark as its
@@ -224,33 +227,43 @@ child. And aufs needs to unlink(2) them before rmdir(2).
 Therefore aufs delegates the actual unlink(2) and rmdir(2) to another kernel
 thread which has been created already and has a superuser privilege.
 
-.\" If you enable CONFIG_AUFS_SYSAUFS, you can check this value through
-.\" <sysfs>/fs/aufs/nwkq.
-.\" .
-.\" .TP
-.\" .B brs=1 | 0
-.\" Specifies to use <sysfs>/fs/aufs/brs or not.
-.\" 
-.\" If the number of your branches is large or their path is long
-.\" and you meet the limitation of mount(8), /etc/mtab or
-.\" /proc/mount, you need to enable CONFIG_AUFS_SYSAUFS and set aufs
-.\" module parameter brs=1.
-.\" 
-.\" When this parameter is set as 1, aufs doesn't show 'br:' (or dirs=)
-.\" mount option through /proc/mounts, and /sbin/mount.aufs doesn't put it
-.\" to /etc/mtab. So you can keep yourself from the page limitation of
-.\" mount(8), /etc/mtab and /proc/mounts.
-.\" Aufs shows 'br:' option through <sysfs>/fs/aufs/brs.
-.\" 
-.\" The default is brs=0, which means <sysfs>/fs/aufs/brs does not exist
-.\" and 'br:' option will appear in /proc/mounts and /etc/mtab if you
-.\" install /sbin/mount.aufs.
-.\" If you didn't enable CONFIG_AUFS_SYSAUFS, this parameter will be
-.\" ignored.
+If you enable CONFIG_SYSFS, you can check this value through
+<sysfs>/module/aufs/parameters/nwkq.
+
+So how many threads is enough? You can check it by
+<sysfs>/fs/aufs/stat. It shows the maximum number of the enqueued work
+at a time per a thread. Usually they are all 1 or 0. If your workload
+is heavy
+and you feel the response is low, then check these values. If there
+are no zero and any of them is larger than one, you should set 'nwkq'
+module parameter greater then the default value.
+But the reason of the bad response is in your branch filesystem, to
+increase the number of aufs thread will not help you.
+.
+.TP
+.B brs=1 | 0
+Specifies to use <sysfs>/fs/aufs/brs or not.
+
+If the number of your branches is large or their path is long
+and you meet the limitation of mount(8), /etc/mtab or
+/proc/mount, you need to enable CONFIG_AUFS_SYSAUFS and set aufs
+module parameter brs=1.
+
+When this parameter is set as 1, aufs doesn't show 'br:' (or dirs=)
+mount option through /proc/mounts, and /sbin/mount.aufs doesn't put it
+to /etc/mtab. So you can keep yourself from the page limitation of
+mount(8), /etc/mtab and /proc/mounts.
+Aufs shows 'br:' option through <sysfs>/fs/aufs/brs.
+
+The default is brs=0, which means <sysfs>/fs/aufs/brs does not exist
+and 'br:' option will appear in /proc/mounts and /etc/mtab if you
+install /sbin/mount.aufs.
+If you didn't enable CONFIG_AUFS_SYSAUFS, this parameter will be
+ignored.
 
 .\" ----------------------------------------------------------------------
 .SH Branch Syntax
-dir_path[=rw|[=ro[+wh]]]
+dir_path[ =rw | =ro | =rowh ]
 
 dir_path is a directory path.
 The keyword after 'dir_path=' is a
@@ -276,7 +289,7 @@ Set as default for all branches except the first one. Aufs never issue
 write operation, and lookup operation for whiteout to this branch.
 .
 .TP
-.B ro+wh
+.B rowh
 Readonly branch and it has/might have whiteouts on it.
 Aufs never issue write operation to this branch, but lookup for whiteout.
 
@@ -500,11 +513,12 @@ named file(s) on the lower branch(es).
 If you use noxino mount option, pseudo link will not work after the
 kernel shrinks the inode cache.
 
-.\" This feature will not work for squashfs since its inode is tricky.
-.\" When the inode is hardlinked, squashfs inodes has the same inode
-.\" number and correct link count, but the inode memory object is
-.\" different. Squashfs inodes are generated for each, even they are
-.\" hardlinked.
+This feature will not work for squashfs before version 3.2 since its
+inode is tricky.
+When the inode is hardlinked, squashfs inodes has the same inode
+number and correct link count, but the inode memory object is
+different. Squashfs inodes (before v3.2) are generated for each, even
+they are hardlinked.
 
 .\" ----------------------------------------------------------------------
 .SH User's Direct Branch Access (UDBA)
@@ -609,7 +623,6 @@ about the file will be discarded and aufs re-lookup. So the data will
 be updated.
 To use this option, you need linux-2.6.18 and later, and need to
 enable CONFIG_INOTIFY and CONFIG_AUFS_UDBA_INOTIFY.
-When CONFIG_AUFS_DEBUG_RWSEM is enabled, this option cannot be used.
 
 .\" ----------------------------------------------------------------------
 .SH Linux Inotify Limitation
@@ -645,56 +658,56 @@ inotify.
 And aufs cannot receive the events anymore. So aufs may show you
 incorrect data about the file/dir.
 
-.\" ----------------------------------------------------------------------
-.\" .SH Exporting aufs via NFS
-.\" Aufs is supporting NFS-exporting in linux-2.6.18 and later.
-.\" Since aufs has no actual block device, you need to add NFS 'fsid' option at
-.\" exporting. Refer to the manual of NFS about the detail of this option.
-.\" 
-.\" It is recommended to export your branch filesystems once before
-.\" exporting aufs. By exporting once, the branch filesystem internal
-.\" pointer named find_exported_dentry is initialized. After this
-.\" initialization, you may unexport them.
-.\" Additionally, this initialization should be done per the
-.\" filesystem type. If your branches are all the same filesystem
-.\" type, you need to export just one of them once.
-.\" If you have never export a filesystem which is used in your
-.\" braches, aufs will initialize the internal pointer by the default
-.\" value, and produce a
-.\" warning. While it will work correctly, I am afraid it will be unsafe
-.\" in the future.
-.\" 
-.\" Additionally, there are several limitations or requirements.
-.\" .RS
-.\" .IP \(bu 4
-.\" The version of linux kernel must be linux-2.6.18 or later.
-.\" .IP \(bu 4
-.\" You need to enable CONFIG_AUFS_EXPORT.
-.\" .IP \(bu 4
-.\" The branch filesystem must support NFS-exporting. For example, tmpfs in
-.\" linux-2.6.18 (or earlier) doesn't support it.
-.\" .IP \(bu 4
-.\" NFSv2 is not supported. When you mount the exported aufs from your NFS
-.\" client, you will need to some NFS options like v3 or nfsvers=v3,
-.\" especially if it is nfsroot.
-.\" .IP \(bu 4
-.\" If the NFS file handle of your branch filesystem is large, aufs will
-.\" not be able to handle it. The maximum size of NFSv3 file
-.\" handle for a filesystem is 64 bytes. Aufs uses 24 bytes for 32bit
-.\" system, plus 12 bytes for 64bit system. The rest is a rootm for a file
-.\" handle of a branch filesystem.
-.\" .IP \(bu 4
-.\" The 'xino' mount option is required since NFS file handle is
-.\" based upon inode number.
-.\" .IP \(bu 4
-.\" The 'noplink' option is recommended.
-.\" .IP \(bu 4
-.\" If you add/del branches many times between the accesses to the same file
-.\" from the same NFS client,
-.\" and the number of the add/del operation is greater than the maximum
-.\" number of branches, then aufs may not handle the request from the NFS
-.\" client correctly.
-.\" .RE
+----------------------------------------------------------------------
+.SH Exporting aufs via NFS
+Aufs is supporting NFS-exporting in linux-2.6.18 and later.
+Since aufs has no actual block device, you need to add NFS 'fsid' option at
+exporting. Refer to the manual of NFS about the detail of this option.
+
+It is recommended to export your branch filesystems once before
+exporting aufs. By exporting once, the branch filesystem internal
+pointer named find_exported_dentry is initialized. After this
+initialization, you may unexport them.
+Additionally, this initialization should be done per the
+filesystem type. If your branches are all the same filesystem
+type, you need to export just one of them once.
+If you have never export a filesystem which is used in your
+braches, aufs will initialize the internal pointer by the default
+value, and produce a
+warning. While it will work correctly, I am afraid it will be unsafe
+in the future.
+
+Additionally, there are several limitations or requirements.
+.RS
+.IP \(bu 4
+The version of linux kernel must be linux-2.6.18 or later.
+.IP \(bu 4
+You need to enable CONFIG_AUFS_EXPORT.
+.IP \(bu 4
+The branch filesystem must support NFS-exporting. For example, tmpfs in
+linux-2.6.18 (or earlier) doesn't support it.
+.IP \(bu 4
+NFSv2 is not supported. When you mount the exported aufs from your NFS
+client, you will need to some NFS options like v3 or nfsvers=v3,
+especially if it is nfsroot.
+.IP \(bu 4
+If the NFS file handle of your branch filesystem is large, aufs will
+not be able to handle it. The maximum size of NFSv3 file
+handle for a filesystem is 64 bytes. Aufs uses 24 bytes for 32bit
+system, plus 12 bytes for 64bit system. The rest is a rootm for a file
+handle of a branch filesystem.
+.IP \(bu 4
+The 'xino' mount option is required since NFS file handle is
+based upon inode number.
+.IP \(bu 4
+The 'noplink' option is recommended.
+.IP \(bu 4
+If you add/del branches many times between the accesses to the same file
+from the same NFS client,
+and the number of the add/del operation is greater than the maximum
+number of branches, then aufs may not handle the request from the NFS
+client correctly.
+.RE
 
 .\" ----------------------------------------------------------------------
 .SH Dentry and Inode Caches
@@ -712,7 +725,7 @@ EINVAL or something, but VFS discards the unused dentry/inode caches on the
 specified filesystem.
 
 .\" ----------------------------------------------------------------------
-.SH Compatible/Incompatible with Unionfs
+.SH Compatible/Incompatible with Unionfs Version 1.x series
 If you compile aufs with -DCONFIG_AUFS_COMPAT, dirs= option and =nfsro
 branch permission flag are available. They are interpreted as
 br: option and =ro flags respectively.
@@ -731,10 +744,10 @@ on the lower branch directly.
 
 And there is a simple shell
 script 'unionctl' which is compatible with unionctl(8) in
-Unionfs, except --query action.
+Unionfs Version 1.x series, except --query action.
 This script executes mount(8) with 'remount' option and uses
 add/del/mod aufs mount options.
-If you are familiar with Unionfs and want to use unionctl(8), you can
+If you are familiar with Unionfs Version 1.x series and want to use unionctl(8), you can
 try this script instead of using mount -o remount,... directly.
 Aufs does not support ioctl(2) interface.
 This script is highly depending upon mount(8) in
@@ -815,33 +828,6 @@ internally.
 It means you may reach the limit of the number of file descriptor.
 And when the lower directory cannot be opened, aufs will close all the
 opened upper directories and return an error.
-
-Linux kernel has a configuration of CONFIG_DEBUG_PROVE_LOCKING in order
-to check locks. In aufs, CONFIG_PROVE_LOCKING
-produces messages unwillingly but harmless, since aufs calls the
-branch filesystem operation as VFS does.
-For example, vfs_link() locks inode mutex as NORMAL subclass and calls aufs
-link operation. aufs_link() calls vfs_link() with passing the inodes
-on branch filesystem. Finally vfs_link() locks inode mutex on the
-branch as the same subclass again.
-CONFIG_DEBUG_PROVE_LOCKING may think those locks are in the
-same subclass and nested. Actually they are in
-different subclasses. One is virtual aufs inode, and the other is real
-hidden (branch) inode. But there is no method to specify the lock
-subclass to VFS functions.
-
-And CONFIG_DEBUG_PROVE_LOCKING also checks the lock class dependency.
-Most of operations to a file will grab locks in this order,
-i_mutex of aufs inode,
-aufs (superblock, dentry info, inode info) read/write semaphores,
-i_mutex of branch filesystem inode.
-CONFIG_DEBUG_PROVE_LOCKING treats this lock sequence as circular,
-since aufs semaphores are depending upon VFS i_mutex and then grabs
-i_mutex of branch filesystem inode.
-
-Finally, aufs gave up supporting CONFIG_DEBUG_PROVE_LOCKING. Instead,
-you can try CONFIG_AUFS_DEBUG and CONFIG_AUFS_DEBUG_RWSEM which
-validate the lock correctness.
 
 The sub-mount under the branch
 of local filesystem

@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: vfsub.c,v 1.1 2007/03/19 04:29:32 sfjro Exp $ */
+/* $Id: vfsub.c,v 1.2 2007/03/27 12:50:29 sfjro Exp $ */
 // I'm going to slightly mad
 
 #include "aufs.h"
@@ -280,36 +280,6 @@ int vfsub_rmdir(struct inode *dir, struct dentry *dentry, int dlgt)
 
 /* ---------------------------------------------------------------------- */
 
-struct notify_change_args {
-	int *errp;
-	struct dentry *dentry;
-	struct iattr *ia;
-};
-
-static void call_notify_change(void *args)
-{
-	struct notify_change_args *a = args;
-	*a->errp = do_vfsub_notify_change(a->dentry, a->ia);
-}
-
-int vfsub_notify_change(struct dentry *dentry, struct iattr *ia, int dlgt)
-{
-	if (!dlgt)
-		return do_vfsub_notify_change(dentry, ia);
-	else {
-		int err;
-		struct notify_change_args args = {
-			.errp	= &err,
-			.dentry	= dentry,
-			.ia	= ia
-		};
-		wkq_wait(call_notify_change, &args, /*dlgt*/1);
-		return err;
-	}
-}
-
-/* ---------------------------------------------------------------------- */
-
 struct read_args {
 	ssize_t *errp;
 	struct file *file;
@@ -330,10 +300,13 @@ static void call_read_k(void *args)
 ssize_t vfsub_read_u(struct file *file, char __user *ubuf, size_t count,
 		     loff_t *ppos, int dlgt)
 {
+	if (unlikely(!count))
+		return 0;
+
 	if (!dlgt)
 		return do_vfsub_read_u(file, ubuf, count, ppos);
 	else {
-		ssize_t err;
+		ssize_t err, read;
 		struct read_args args = {
 			.errp	= &err,
 			.file	= file,
@@ -341,17 +314,38 @@ ssize_t vfsub_read_u(struct file *file, char __user *ubuf, size_t count,
 			.ppos	= ppos
 		};
 
+		/*
+		 * workaround an application bug.
+		 * generally, read(2) or write(2) may return the value shorter
+		 * then requested. But many applications don't support it,
+		 * for example bash.
+		 */
 		if (args.count > PAGE_SIZE)
 			args.count = PAGE_SIZE;
-		err = -ENOMEM;
 		args.kbuf = kmalloc(args.count, GFP_KERNEL);
-		if (args.kbuf) {
+		if (unlikely(!args.kbuf))
+			goto out;
+
+		read = 0;
+		do {
 			wkq_wait(call_read_k, &args, /*dlgt*/1);
 			if (unlikely(err > 0
-				     && copy_to_user(ubuf, args.kbuf, err)))
+				     && copy_to_user(ubuf, args.kbuf, err))) {
 				err = -EFAULT;
-			kfree(args.kbuf);
-		}
+				goto out_free;
+			} else if (!err)
+				break;
+			else if (unlikely(err < 0))
+				goto out_free;
+			count -= err;
+			ubuf += err;
+			read += err;
+		} while (count);
+		err = read;
+
+	out_free:
+		kfree(args.kbuf);
+	out:
 		return err;
 	}
 }
@@ -366,7 +360,6 @@ ssize_t vfsub_read_k(struct file *file, void *kbuf, size_t count, loff_t *ppos,
 		struct read_args args = {
 			.errp	= &err,
 			.file	= file,
-			//.kbuf	= kbuf,
 			.count	= count,
 			.ppos	= ppos
 		};
@@ -397,10 +390,13 @@ static void call_write_k(void *args)
 ssize_t vfsub_write_u(struct file *file, const char __user *ubuf, size_t count,
 		      loff_t *ppos, int dlgt)
 {
+	if (unlikely(!count))
+		return 0;
+
 	if (!dlgt)
 		return do_vfsub_write_u(file, ubuf, count, ppos);
 	else {
-		ssize_t err;
+		ssize_t err, written;
 		struct write_args args = {
 			.errp	= &err,
 			.file	= file,
@@ -408,17 +404,44 @@ ssize_t vfsub_write_u(struct file *file, const char __user *ubuf, size_t count,
 			.ppos	= ppos
 		};
 
+		err = -ENOMEM;
+
+		/*
+		 * workaround an application bug.
+		 * generally, read(2) or write(2) may return the value shorter
+		 * then requested. But many applications don't support it,
+		 * for example bash.
+		 */
 		if (args.count > PAGE_SIZE)
 			args.count = PAGE_SIZE;
-		err = -ENOMEM;
 		args.kbuf = kmalloc(args.count, GFP_KERNEL);
-		if (args.kbuf) {
-			if (!copy_from_user(args.kbuf, ubuf, count))
-				wkq_wait(call_write_k, &args, /*dlgt*/1);
-			else
+		if (unlikely(!args.kbuf))
+			goto out;
+
+		written = 0;
+		do {
+			if (unlikely(copy_from_user(args.kbuf, ubuf, args.count))) {
 				err = -EFAULT;
-			kfree(args.kbuf);
-		}
+				goto out_free;
+			}
+
+			wkq_wait(call_write_k, &args, /*dlgt*/1);
+			if (err > 0) {
+				count -= err;
+				if (count < args.count)
+					args.count = count;
+				ubuf += err;
+				written += err;
+			} else if (!err)
+				break;
+			else if (unlikely(err < 0))
+				goto out_free;
+		} while (count);
+		err = written;
+
+	out_free:
+		kfree(args.kbuf);
+	out:
 		return err;
 	}
 }
@@ -433,11 +456,10 @@ ssize_t vfsub_write_k(struct file *file, void *kbuf, size_t count, loff_t *ppos,
 		struct write_args args = {
 			.errp	= &err,
 			.file	= file,
-			//.kbuf	= kbuf,
 			.count	= count,
 			.ppos	= ppos
 		};
-		args.kbuf = kbuf,
+		args.kbuf = kbuf;
 		wkq_wait(call_write_k, &args, /*dlgt*/1);
 		return err;
 	}
@@ -476,6 +498,55 @@ int vfsub_readdir(struct file *file, filldir_t filldir, void *arg, int dlgt)
 
 /* ---------------------------------------------------------------------- */
 
+struct notify_change_args {
+	int *errp;
+	struct dentry *h_dentry;
+	struct iattr *ia;
+};
+
+static void call_notify_change(void *args)
+{
+	struct notify_change_args *a = args;
+	struct inode *h_inode;
+
+	LKTRTrace("%.*s, ia_valid 0x%x\n",
+		  DLNPair(a->h_dentry), a->ia->ia_valid);
+	h_inode = a->h_dentry->d_inode;
+	IMustLock(h_inode);
+
+	*a->errp = -EPERM;
+	if (!IS_IMMUTABLE(h_inode) && !IS_APPEND(h_inode)) {
+		lockdep_off();
+		*a->errp = notify_change(a->h_dentry, a->ia);
+		lockdep_on();
+	}
+	TraceErr(*a->errp);
+}
+
+int vfsub_notify_change(struct dentry *dentry, struct iattr *ia, int dlgt)
+{
+	int err;
+	struct notify_change_args args = {
+		.errp		= &err,
+		.h_dentry	= dentry,
+		.ia		= ia
+	};
+
+#ifndef CONFIG_AUFS_DLGT
+	call_notify_change(&args);
+#else
+	if (!dlgt)
+		call_notify_change(&args);
+	else
+		wkq_wait(call_notify_change, &args, /*dlgt*/1);
+#endif
+
+	TraceErr(err);
+	return err;
+}
+
+/* ---------------------------------------------------------------------- */
+
 struct unlink_args {
 	int *errp;
 	struct inode *dir;
@@ -486,7 +557,7 @@ static void call_unlink(void *args)
 {
 	struct unlink_args *a = args;
 	struct inode *h_inode;
-	const int stop_sillyrename = (SB_NFS(a->dentry->d_sb)
+	const int stop_sillyrename = (au_is_nfs(a->dentry->d_sb)
 				      && atomic_read(&a->dentry->d_count) == 1);
 
 	LKTRTrace("%.*s\n", DLNPair(a->dentry));
@@ -536,10 +607,14 @@ int vfsub_unlink(struct inode *dir, struct dentry *dentry, int dlgt)
 		.dentry	= dentry
 	};
 
+#ifndef CONFIG_AUFS_DLGT
+	call_unlink(&args);
+#else
 	if (!dlgt)
 		call_unlink(&args);
 	else
 		wkq_wait(call_unlink, &args, /*dlgt*/1);
+#endif
 	return err;
 }
 
@@ -559,16 +634,20 @@ static void call_statfs(void *args)
 
 int vfsub_statfs(void *arg, struct kstatfs *buf, int dlgt)
 {
+	int err;
+	struct statfs_args args = {
+		.errp	= &err,
+		.arg	= arg,
+		.buf	= buf
+	};
+
+#ifndef CONFIG_AUFS_DLGT
+	call_statfs(&args);
+#else
 	if (!dlgt)
-		return vfs_statfs(arg, buf);
-	else {
-		int err;
-		struct statfs_args args = {
-			.errp	= &err,
-			.arg	= arg,
-			.buf	= buf
-		};
+		call_statfs(&args);
+	else
 		wkq_wait(call_statfs, &args, /*dlgt*/1);
-		return err;
-	}
+#endif
+	return err;
 }

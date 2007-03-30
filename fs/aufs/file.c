@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: file.c,v 1.35 2007/03/19 04:32:34 sfjro Exp $ */
+/* $Id: file.c,v 1.36 2007/03/27 12:51:43 sfjro Exp $ */
 
 //#include <linux/fsnotify.h>
 #include <linux/pagemap.h>
@@ -46,13 +46,13 @@ struct file *hidden_open(struct dentry *dentry, aufs_bindex_t bindex, int flags)
 
 	LKTRTrace("%.*s, b%d, flags 0%o\n", DLNPair(dentry), bindex, flags);
 	DEBUG_ON(!dentry);
-	hidden_dentry = h_dptr_i(dentry, bindex);
+	hidden_dentry = au_h_dptr_i(dentry, bindex);
 	DEBUG_ON(!hidden_dentry);
 	hidden_inode = hidden_dentry->d_inode;
 	DEBUG_ON(!hidden_inode);
 
 	sb = dentry->d_sb;
-	udba = IS_MS(sb, MS_UDBA_INOTIFY);
+	udba = au_flag_test(sb, AuFlag_UDBA_INOTIFY);
 	if (unlikely(udba)) {
 		// test here?
 	}
@@ -82,9 +82,9 @@ struct file *hidden_open(struct dentry *dentry, aufs_bindex_t bindex, int flags)
 	if (!IS_ERR(hidden_file)) {
 #if 0 // remove this
 		if (/* old_size && */ (flags & O_TRUNC)) {
-			direval_dec(dentry);
+			au_direval_dec(dentry);
 			if (!IS_ROOT(dentry))
-				direval_dec(dentry->d_parent);
+				au_direval_dec(dentry->d_parent);
 		}
 #endif
 		return hidden_file;
@@ -116,21 +116,21 @@ static int do_coo(struct dentry *dentry, aufs_bindex_t bstart)
 	}
 	err = 0;
 
-	h_parent = h_dptr_i(parent, bcpup);
+	h_parent = au_h_dptr_i(parent, bcpup);
 	if (!h_parent) {
 		err = cpup_dirs(dentry, bcpup, NULL);
 		if (unlikely(err))
 			goto out;
-		h_parent = h_dptr_i(parent, bcpup);
+		h_parent = au_h_dptr_i(parent, bcpup);
 	}
 
 	h_dir = h_parent->d_inode;
-	h_dentry = h_dptr_i(dentry, bstart);
+	h_dentry = au_h_dptr_i(dentry, bstart);
 	h_inode = h_dentry->d_inode;
 	dir = parent->d_inode;
 	hdir_lock(h_dir, dir, bcpup);
 	hi_lock_child(h_inode);
-	DEBUG_ON(h_dptr_i(dentry, bcpup));
+	DEBUG_ON(au_h_dptr_i(dentry, bcpup));
 	err = sio_cpup_simple(dentry, bcpup, -1,
 			      au_flags_cpup(CPUP_DTIME, parent));
 	TraceErr(err);
@@ -159,11 +159,11 @@ int au_do_open(struct inode *inode, struct file *file,
 	si_read_lock(sb);
 	coo = 0;
 #if 0
-	switch (MS_COO(sb)) {
-	case MS_COO_LEAF:
+	switch (au_flag_test_coo(sb)) {
+	case AuFlag_COO_LEAF:
 		coo = !S_ISDIR(inode->i_mode);
 		break;
-	case MS_COO_ALL:
+	case AuFlag_COO_ALL:
 		coo = 1;
 		break;
 	}
@@ -194,7 +194,7 @@ int au_do_open(struct inode *inode, struct file *file,
 	dir = dentry->d_parent->d_inode;
 	if (!IS_ROOT(dentry))
 		ii_read_lock_parent(dir);
-	h_dir = h_iptr_i(dir, bstart);
+	h_dir = au_h_iptr_i(dir, bstart);
 	hdir_lock(h_dir, dir, bstart);
 	err = open(file, file->f_flags);
 	//if (LktrCond) err = -1;
@@ -224,12 +224,12 @@ int au_reopen_nondir(struct file *file)
 	dentry = file->f_dentry;
 	LKTRTrace("%.*s\n", DLNPair(dentry));
 	DEBUG_ON(S_ISDIR(dentry->d_inode->i_mode)
-		 || !h_dptr(dentry)->d_inode);
+		 || !au_h_dptr(dentry)->d_inode);
 	bstart = dbstart(dentry);
 
 	h_file_tmp = NULL;
 	if (fbstart(file) == bstart) {
-		hidden_file = h_fptr(file);
+		hidden_file = au_h_fptr(file);
 		if (file->f_mode == hidden_file->f_mode)
 			return 0; /* success */
 		h_file_tmp = hidden_file;
@@ -285,13 +285,13 @@ static int cpup_wh_file(struct file *file, aufs_bindex_t bdst, loff_t len)
 	DiMustWriteLock(dentry);
 	parent = dentry->d_parent;
 	IiMustAnyLock(parent->d_inode);
-	hidden_parent = h_dptr_i(parent, bdst);
+	hidden_parent = au_h_dptr_i(parent, bdst);
 	DEBUG_ON(!hidden_parent);
 	hidden_dir = hidden_parent->d_inode;
 	DEBUG_ON(!hidden_dir);
 	IMustLock(hidden_dir);
 
-	lkup.nfsmnt = mnt_nfs(parent->d_sb, bdst);
+	lkup.nfsmnt = au_nfsmnt(parent->d_sb, bdst);
 	lkup.dlgt = need_dlgt(parent->d_sb);
 	tmp_dentry = lkup_whtmp(hidden_parent, &dentry->d_name, &lkup);
 	//if (LktrCond) {dput(tmp_dentry); tmp_dentry = ERR_PTR(-1);}
@@ -306,8 +306,7 @@ static int cpup_wh_file(struct file *file, aufs_bindex_t bdst, loff_t len)
 	hidden_dentry_bstart = dinfo->di_hdentry[0 + bstart].hd_dentry;
 	dinfo->di_bstart = bdst;
 	dinfo->di_hdentry[0 + bdst].hd_dentry = tmp_dentry;
-	dinfo->di_hdentry[0 + bstart].hd_dentry = h_fptr(file)->f_dentry;
-	//smp_mb();
+	dinfo->di_hdentry[0 + bstart].hd_dentry = au_h_fptr(file)->f_dentry;
 	err = cpup_single(dentry, bdst, bstart, len,
 			  au_flags_cpup(!CPUP_DTIME, parent));
 	//if (LktrCond) err = -1;
@@ -318,7 +317,6 @@ static int cpup_wh_file(struct file *file, aufs_bindex_t bdst, loff_t len)
 		dinfo->di_hdentry[0 + bstart].hd_dentry = hidden_dentry_bstart;
 		dinfo->di_hdentry[0 + bdst].hd_dentry = hidden_dentry_bdst;
 		dinfo->di_bstart = bstart;
-		//smp_mb();
 		goto out_tmp;
 	}
 
@@ -373,11 +371,10 @@ int au_ready_to_write(struct file *file, loff_t len)
 
 	inode = dentry->d_inode;
 	ii_read_lock_child(inode);
-	LKTRTrace("rdonly %d, bstart %d\n",
-		  test_ro(sb, bstart, inode), bstart);
+	LKTRTrace("rdonly %d, bstart %d\n", test_ro(sb, bstart, inode), bstart);
 	err = test_ro(sb, bstart, inode);
 	ii_read_unlock(inode);
-	if (!err && (h_fptr(file)->f_mode & FMODE_WRITE))
+	if (!err && (au_h_fptr(file)->f_mode & FMODE_WRITE))
 		return 0;
 
 	/* need to cpup */
@@ -390,17 +387,17 @@ int au_ready_to_write(struct file *file, loff_t len)
 		goto out_unlock;
 	err = 0;
 
-	hidden_parent = h_dptr_i(parent, bcpup);
+	hidden_parent = au_h_dptr_i(parent, bcpup);
 	if (!hidden_parent) {
 		err = cpup_dirs(dentry, bcpup, NULL);
 		//if (LktrCond) err = -1;
 		if (unlikely(err))
 			goto out_unlock;
-		hidden_parent = h_dptr_i(parent, bcpup);
+		hidden_parent = au_h_dptr_i(parent, bcpup);
 	}
 
 	hidden_dir = hidden_parent->d_inode;
-	hidden_dentry = h_fptr(file)->f_dentry;
+	hidden_dentry = au_h_fptr(file)->f_dentry;
 	hidden_inode = hidden_dentry->d_inode;
 	dir = parent->d_inode;
 	hdir_lock(hidden_dir, dir, bcpup);
@@ -422,7 +419,7 @@ int au_ready_to_write(struct file *file, loff_t len)
 		//if (LktrCond) err = -1;
 		TraceErr(err);
 	} else {
-		if (!h_dptr_i(dentry, bcpup))
+		if (!au_h_dptr_i(dentry, bcpup))
 			err = sio_cpup_simple(dentry, bcpup, len,
 					      au_flags_cpup(CPUP_DTIME,
 							    parent));
@@ -446,21 +443,6 @@ int au_ready_to_write(struct file *file, loff_t len)
 }
 
 /* ---------------------------------------------------------------------- */
-
-struct cpup_pseudo_link_args {
-	int *errp;
-	struct dentry *dentry;
-	aufs_bindex_t bdst;
-	int do_lock;
-};
-
-#if 0
-static void call_cpup_pseudo_link(void *args)
-{
-	struct cpup_pseudo_link_args *a = args;
-	*a->errp = cpup_pseudo_link(a->dentry, a->bdst, a->do_lock);
-}
-#endif
 
 /*
  * after branch manipulating, refresh the file.
@@ -489,13 +471,12 @@ static int refresh_file(struct file *file, int (*reopen)(struct file *file))
 	bstart = finfo->fi_bstart;
 	bend = finfo->fi_bstart;
 	new_sz = sizeof(*finfo->fi_hfile) * (sbend(sb) + 1);
-	p = kzrealloc(finfo->fi_hfile, sizeof(*p) * (finfo->fi_bend + 1),
-		      new_sz);
+	p = au_kzrealloc(finfo->fi_hfile, sizeof(*p) * (finfo->fi_bend + 1),
+			 new_sz);
 	//p = NULL;
 	if (unlikely(!p))
 		goto out;
 	finfo->fi_hfile = p;
-	//smp_mb();
 	hidden_file = p[0 + bstart].hf_file;
 
 	p = finfo->fi_hfile + finfo->fi_bstart;
@@ -535,12 +516,11 @@ static int refresh_file(struct file *file, int (*reopen)(struct file *file))
 	for (finfo->fi_bend = bend; finfo->fi_bend >= 0; finfo->fi_bend--, p--)
 		if (p->hf_file)
 			break;
-	//smp_mb();
 	DEBUG_ON(finfo->fi_bend < finfo->fi_bstart);
 
 	err = 0;
 #if 0 // todo:
-	if (!h_dptr(dentry)->d_inode) {
+	if (!au_h_dptr(dentry)->d_inode) {
 		au_update_figen(file);
 		goto out; /* success */
 	}
@@ -549,7 +529,7 @@ static int refresh_file(struct file *file, int (*reopen)(struct file *file))
  again:
 	bstart = ibstart(inode);
 	if (bstart < finfo->fi_bstart
-	    && IS_MS(sb, MS_PLINK)
+	    && au_flag_test(sb, AuFlag_PLINK)
 	    && au_is_plinked(sb, inode)) {
 		struct dentry *parent = dentry->d_parent; // dget_parent()
 		struct inode *dir = parent->d_inode, *h_dir;
@@ -576,14 +556,14 @@ static int refresh_file(struct file *file, int (*reopen)(struct file *file))
 
 		// always superio.
 #if 1
-		h_dir = h_dptr_i(parent, bstart)->d_inode;
+		h_dir = au_h_dptr_i(parent, bstart)->d_inode;
 		hdir_lock(h_dir, dir, bstart);
 		err = sio_cpup_simple(dentry, bstart, -1,
 				      au_flags_cpup(CPUP_DTIME, parent));
 		hdir_unlock(h_dir, dir, bstart);
 		di_read_unlock(parent, AUFS_I_RLOCK);
 #else
-		if (!is_kthread(current)) {
+		if (!au_is_kthread(current)) {
 			struct cpup_pseudo_link_args args = {
 				.errp		= &err,
 				.dentry		= dentry,
@@ -630,19 +610,19 @@ int au_reval_and_lock_finfo(struct file *file, int (*reopen)(struct file *file),
 	SiMustAnyLock(sb);
 
 	err = 0;
-	if (IS_ROOT(dentry) || is_mmapped(file))
+	if (IS_ROOT(dentry) || au_is_mmapped(file))
 		goto out_lock;
 
 	sgen = au_sigen(sb);
 	di_read_lock_child(dentry, AUFS_I_RLOCK);
-	fgen = figen(file);
+	fgen = au_figen(file);
 	pseudo_link = (dbstart(dentry) != ibstart(dentry->d_inode));
 	di_read_unlock(dentry, AUFS_I_RLOCK);
 	if (sgen == fgen && !pseudo_link)
 		goto out_lock;
 
 	LKTRTrace("sgen %d, fgen %d\n", sgen, fgen);
-	if (sgen != digen(dentry)) {
+	if (sgen != au_digen(dentry)) {
 		/*
 		 * d_path() and path_lookup() is a simple and good approach
 		 * to revalidate. but si_rwsem in DEBUG_RWSEM will cause a
@@ -654,7 +634,7 @@ int au_reval_and_lock_finfo(struct file *file, int (*reopen)(struct file *file),
 		di_write_unlock(dentry);
 		if (unlikely(err < 0))
 			goto out;
-		DEBUG_ON(digen(dentry) != sgen);
+		DEBUG_ON(au_digen(dentry) != sgen);
 	}
 
 	fi_write_lock(file);

@@ -2,7 +2,7 @@
 Aufs -- Another Unionfs
 Junjiro Okajima
 
-# $Id: README,v 1.41 2007/03/19 04:34:07 sfjro Exp $
+# $Id: README,v 1.42 2007/03/27 12:45:19 sfjro Exp $
 
 
 0. Introduction
@@ -57,10 +57,11 @@ Aufs is in still development stage, especially,,,
 - pseudo hardlink (hardlink over branches)
 - allow a direct access manually to a file on branch, e.g. bypassing aufs.
   including NFS or remote filesystem branch.
-
-(current work)
 - export via NFS.
 - /sys/fs/aufs.
+
+(current work)
+- lockdep
 - support Linux Security Modules (LSM), mainly for Suse AppArmor.
 - nested mount, i.e. aufs as readonly no-whiteout branch of another aufs.
 
@@ -71,7 +72,8 @@ Aufs is in still development stage, especially,,,
 - remount option copy/move between two branches. (unnecessary?)
 - O_DIRECT (unnecessary?)
 - light version, without branch manipulation. (unnecessary?)
-- SMP, because I don't have such machine.
+- SMP, because I don't have such machine. But several users reported
+  aufs is working fine.
 - 64bit environment, because I don't have such machine.
 - xattr, acl
 - disk quota (unnecessary?)
@@ -103,25 +105,7 @@ and reported to aufs-users at lists.sourceforge.net ML. It is recommended to
 join this ML.
 
 
-3. Contact
-----------------------------------------
-When you have any problems or strange behaviour in aufs, please let me
-know with,,,
-- /proc/mounts (instead of the output of mount(8))
-- /sys/fs/aufs/* (if you have them)
-- linux kernel version
-- AUFS_VERSION (defined in include/linux/aufs_type.h)
-- configuration (define/undefine CONFIG_AUFS_xxx, or plain local.mk is
-  used or not)
-- phenomenon
-- actual operation, reproducible one is better
-- mailto: aufs-users at lists.sourceforge.net
-
-Usually, I don't watch the Public Areas(Bugs, Support Requests, Patches,
-Feature Requests) on SourceForge. Please join and write to aufs-users ML.
-
-
-4. Configuration and Compilation
+3. Configuration and Compilation
 ----------------------------------------
 Aufs is being developed and tested on linux-2.6.16 and later.
 You need the correct environment to build a kernel module. Generally
@@ -129,13 +113,6 @@ it is an environment which your kernel was built.
 If you are unsure that you got the correct environment, then I
 recommend you to built your kernel by yourself. If it succeeds, you've
 got the correct environment.
-
-o CONFIG_DEBUG_PROVE_LOCKING (in linux kernel)
-If you enable CONFIG_DEBUG_PROVE_LOCKING in your linux kernel, you
-will be warned at aufs compile time. And at aufs run time, some
-harmless warnings will be issued, and CONFIG_DEBUG_PROVE_LOCKING will
-be disabled automatically.
-See detail in aufs.5.
 
 Currently aufs configuration is written in ./Kconfig.in. You can build the
 real ./fs/aufs/Kconfig file by 'make.' And follow the instructions which will
@@ -152,15 +129,22 @@ Also you can use ./local.mk to compile aufs as a module by simply,
 or
 	$ make KDIR=/your/kernel/build/path -f local.mk
 
-The default configuration is written in ./local.mk too, they will work for you
-in most cases. You can edit this file and change the configuration for your
-aufs module.
+The default configuration is written in ./local.mk too, they will work
+for you in most cases. You can edit this file and change the
+configuration for your aufs module.
 If you don't want to change the ./local.mk, then create a new file
 ./priv_def.mk and write the definitions your aufs configuration. The
-./local.mk includes ./priv_def.mk.
+./local.mk includes ./priv_def.mk it it exists.
+
+Currently, CONFIG_DEBUG_PROVE_LOCKING (in linux kernel) is not
+supported since MAX_LOCKDEP_SUBCLASSES is too low for a stackable
+filesystem. I am trying reducing the depth of lock subclasses.
+
+When you test the performance, it is recommended to disable
+CONFIG_AUFS_DEBUG. It is enabled by default for the feature test.
 
 
-5. Usage
+4. Usage
 ----------------------------------------
 After 'make',
 	$ man -l ./aufs.5
@@ -187,8 +171,27 @@ not affected, but the same named file will be newly created under
 /tmp/rw. And all of your modification to the file will be applied to
 the one under /tmp/rw. This is called Copy on Write (COW) method.
 Aufs mount options are described in the generated ./aufs.5.
-Additionally, there is a sample usage of aufs which is a diskless system with
-network booting. See ./sample in detail.
+Additionally, there are some sample usages of aufs which are a
+diskless system with network booting, and LiveCD over NFS.
+See ./sample in detail.
+
+
+5. Contact
+----------------------------------------
+When you have any problems or strange behaviour in aufs, please let me
+know with,,,
+- /proc/mounts (instead of the output of mount(8))
+- /sys/fs/aufs/* (if you have them)
+- linux kernel version
+- AUFS_VERSION (defined in include/linux/aufs_type.h)
+- configuration (define/undefine CONFIG_AUFS_xxx, or plain local.mk is
+  used or not)
+- phenomenon
+- actual operation, reproducible one is better
+- mailto: aufs-users at lists.sourceforge.net
+
+Usually, I don't watch the Public Areas(Bugs, Support Requests, Patches,
+Feature Requests) on SourceForge. Please join and write to aufs-users ML.
 
 
 6.

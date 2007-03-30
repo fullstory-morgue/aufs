@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: vdir.c,v 1.16 2007/03/19 04:32:35 sfjro Exp $ */
+/* $Id: vdir.c,v 1.17 2007/03/27 12:51:44 sfjro Exp $ */
 
 #include "aufs.h"
 
@@ -146,7 +146,7 @@ int test_known_wh(struct aufs_nhash *whlist, char *name, int namelen)
 
 	LKTRTrace("%.*s\n", namelen, name);
 
-	head = whlist->heads + n_hash(name, namelen);
+	head = whlist->heads + au_name_hash(name, namelen);
 	hlist_for_each_entry(tpos, pos, head, wh_hash) {
 		str = &tpos->wh_str;
 		LKTRTrace("%.*s\n", str->len, str->name);
@@ -174,7 +174,8 @@ int append_wh(struct aufs_nhash *whlist, char *name, int namelen,
 	str = &wh->wh_str;
 	str->len = namelen;
 	memcpy(str->name, name, namelen);
-	hlist_add_head(&wh->wh_hash, whlist->heads + n_hash(name, namelen));
+	hlist_add_head(&wh->wh_hash,
+		       whlist->heads + au_name_hash(name, namelen));
 	//smp_mb();
 
  out:
@@ -209,7 +210,7 @@ static int append_deblk(struct aufs_vdir *vdir)
 
 	err = -ENOMEM;
 	sz = sizeof(*o) * vdir->vd_nblk;
-	o = kzrealloc(vdir->vd_deblk, sz, sz + sizeof(*o));
+	o = au_kzrealloc(vdir->vd_deblk, sz, sz + sizeof(*o));
 	if (unlikely(!o))
 		goto out;
 	vdir->vd_deblk = o;
@@ -316,7 +317,7 @@ static int test_known(struct aufs_nhash *delist, char *name, int namelen)
 
 	LKTRTrace("%.*s\n", namelen, name);
 
-	head = delist->heads + n_hash(name, namelen);
+	head = delist->heads + au_name_hash(name, namelen);
 	hlist_for_each_entry(tpos, pos, head, hash) {
 		str = tpos->str;
 		LKTRTrace("%.*s\n", str->len, str->name);
@@ -358,7 +359,8 @@ static int append_de(struct aufs_vdir *vdir, char *name, int namelen, ino_t ino,
 	if (unlikely(!dehstr))
 		goto out;
 	dehstr->str = &room->de->de_str;
-	hlist_add_head(&dehstr->hash, delist->heads + n_hash(name, namelen));
+	hlist_add_head(&dehstr->hash,
+		       delist->heads + au_name_hash(name, namelen));
 
 	room->de->de_ino = ino;
 	room->de->de_type = d_type;
@@ -504,7 +506,7 @@ static int read_vdir(struct file *file, int may_read)
 		struct file *hf;
 		struct inode *h_inode;
 
-		hf = h_fptr_i(file, bindex);
+		hf = au_h_fptr_i(file, bindex);
 		if (!hf)
 			continue;
 
@@ -539,7 +541,6 @@ static int read_vdir(struct file *file, int may_read)
 			set_ivdir(inode, allocated);
 	} else if (allocated)
 		free_vdir(allocated);
-	//smp_mb();
 	//DbgVdir(vdir); goto out;
 
  out:
@@ -558,8 +559,8 @@ static int copy_vdir(struct aufs_vdir *tgt, struct aufs_vdir *src)
 	err = -ENOMEM;
 	if (tgt->vd_nblk < src->vd_nblk) {
 		aufs_deblk_t **p;
-		p = kzrealloc(tgt->vd_deblk, sizeof(*p) * tgt->vd_nblk,
-			      sizeof(*p) * src->vd_nblk);
+		p = au_kzrealloc(tgt->vd_deblk, sizeof(*p) * tgt->vd_nblk,
+				 sizeof(*p) * src->vd_nblk);
 		if (unlikely(!p))
 			goto out;
 		tgt->vd_deblk = p;
@@ -633,7 +634,6 @@ int au_init_vdir(struct file *file)
 			set_fvdir_cache(file, allocated);
 	} else if (allocated)
 		free_vdir(allocated);
-	//smp_mb();
 
  out:
 	TraceErr(err);

@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: whout.c,v 1.7 2007/03/19 04:31:31 sfjro Exp $ */
+/* $Id: whout.c,v 1.8 2007/03/27 12:50:47 sfjro Exp $ */
 
 #include <linux/fs.h>
 #include <linux/kthread.h>
@@ -213,14 +213,14 @@ int rename_whtmp(struct dentry *dentry, aufs_bindex_t bindex)
 	struct lkup_args lkup;
 
 	LKTRTrace("%.*s, b%d\n", DLNPair(dentry), bindex);
-	hidden_dentry = h_dptr_i(dentry, bindex);
+	hidden_dentry = au_h_dptr_i(dentry, bindex);
 	DEBUG_ON(!hidden_dentry || !hidden_dentry->d_inode);
 	hidden_parent = hidden_dentry->d_parent;
 	hidden_dir = hidden_parent->d_inode;
 	IMustLock(hidden_dir);
 
 	sb = dentry->d_sb;
-	lkup.nfsmnt = mnt_nfs(sb, bindex);
+	lkup.nfsmnt = au_nfsmnt(sb, bindex);
 	lkup.dlgt = need_dlgt(sb);
 	tmp_dentry = lkup_whtmp(hidden_parent, &hidden_dentry->d_name, &lkup);
 	//if (LktrCond) {dput(tmp_dentry); tmp_dentry = ERR_PTR(-1);}
@@ -345,7 +345,7 @@ int init_wh(struct dentry *hidden_root, struct aufs_branch *br,
 			err = 0;
 	} else {
 		int mode = S_IRWXU;
-		if (unlikely(SB_NFS(plink->d_sb)))
+		if (unlikely(au_is_nfs(plink->d_sb)))
 			mode |= S_IXUGO;
 		err = vfsub_mkdir(hidden_dir, plink, mode, /*dlgt*/0);
 	}
@@ -383,7 +383,7 @@ static int reinit_br_wh(void *arg)
 
 	err = 0;
 	si_read_lock(a->sb);
-	if (unlikely(!(a->br->br_perm & MAY_WRITE)))
+	if (unlikely(a->br->br_perm != AuBrPerm_RW))
 		goto out;
 	bindex = find_brindex(a->sb, a->br->br_id);
 	if (unlikely(bindex < 0))
@@ -400,7 +400,7 @@ static int reinit_br_wh(void *arg)
 	dput(a->br->br_wh);
 	a->br->br_wh = NULL;
 	if (!err)
-		err = init_wh(hidden_root, a->br, do_mnt_nfs(a->br->br_mnt));
+		err = init_wh(hidden_root, a->br, au_do_nfsmnt(a->br->br_mnt));
 	br_wh_write_unlock(a->br);
 	hdir_unlock(hidden_dir, dir, bindex);
 
@@ -499,7 +499,7 @@ static struct dentry *do_diropq(struct dentry *dentry, aufs_bindex_t bindex,
 
 	LKTRTrace("%.*s, bindex %d, do_create %d\n", DLNPair(dentry),
 		  bindex, do_create);
-	hidden_dentry = h_dptr_i(dentry, bindex);
+	hidden_dentry = au_h_dptr_i(dentry, bindex);
 	DEBUG_ON(!hidden_dentry);
 	hidden_dir = hidden_dentry->d_inode;
 	DEBUG_ON(!hidden_dir || !S_ISDIR(hidden_dir->i_mode));
@@ -507,7 +507,7 @@ static struct dentry *do_diropq(struct dentry *dentry, aufs_bindex_t bindex,
 
 	// already checked by au_test_perm().
 	sb = dentry->d_sb;
-	lkup.nfsmnt = mnt_nfs(sb, bindex);
+	lkup.nfsmnt = au_nfsmnt(sb, bindex);
 	lkup.dlgt = dlgt;
 	opq_dentry = lkup_one(diropq_name.name, hidden_dentry, diropq_name.len,
 			      &lkup);
@@ -560,7 +560,7 @@ struct dentry *sio_diropq(struct dentry *dentry, aufs_bindex_t bindex,
 	LKTRTrace("%.*s, bindex %d, do_create %d\n",
 		  DLNPair(dentry), bindex, do_create);
 
-	hidden_dentry = h_dptr_i(dentry, bindex);
+	hidden_dentry = au_h_dptr_i(dentry, bindex);
 	if (!au_test_perm(hidden_dentry->d_inode, MAY_EXEC | MAY_WRITE, dlgt))
 		diropq = do_diropq(dentry, bindex, do_create, dlgt);
 	else {
@@ -625,7 +625,7 @@ struct dentry *simple_create_wh(struct dentry *dentry, aufs_bindex_t bindex,
 
 	sb = dentry->d_sb;
 	wh_dentry = lkup_wh(hidden_parent, &dentry->d_name, lkup);
-	//mnt_nfs(sb, bindex), need_dlgt(sb));
+	//au_nfsmnt(sb, bindex), need_dlgt(sb));
 	//if (LktrCond) {dput(wh_dentry); wh_dentry = ERR_PTR(-1);}
 	if (!IS_ERR(wh_dentry) && !wh_dentry->d_inode) {
 		IMustLock(hidden_parent->d_inode);
@@ -738,10 +738,10 @@ int rmdir_whtmp(struct dentry *hidden_dentry, struct aufs_nhash *whlist,
 	hidden_dir = hidden_dentry->d_parent->d_inode;
 	IMustLock(hidden_dir);
 
-	lkup.nfsmnt = mnt_nfs(inode->i_sb, bindex);
+	lkup.nfsmnt = au_nfsmnt(inode->i_sb, bindex);
 	lkup.dlgt = need_dlgt(inode->i_sb);
 	hidden_inode = hidden_dentry->d_inode;
-	DEBUG_ON(hidden_inode != h_iptr_i(inode, bindex));
+	DEBUG_ON(hidden_inode != au_h_iptr_i(inode, bindex));
 	hdir2_lock(hidden_inode, inode, bindex);
 	if (!au_test_perm(hidden_inode, MAY_EXEC | MAY_WRITE, lkup.dlgt))
 		err = del_wh_children(whlist, hidden_dentry, bindex, &lkup);
@@ -755,6 +755,7 @@ int rmdir_whtmp(struct dentry *hidden_dentry, struct aufs_nhash *whlist,
 			.bindex		= bindex,
 			.lkup		= &lkup
 		};
+
 		lkup.dlgt = 0;
 		wkq_wait(call_del_wh_children, &args, /*dlgt*/0);
 		lkup.dlgt = dlgt;

@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: dir.c,v 1.30 2007/03/19 04:31:58 sfjro Exp $ */
+/* $Id: dir.c,v 1.31 2007/03/27 12:51:43 sfjro Exp $ */
 
 #include "aufs.h"
 
@@ -37,10 +37,10 @@ static int reopen_dir(struct file *file)
 	btail = dbtaildir(dentry);
 	set_fbend(file, btail);
 	for (; bindex <= btail; bindex++) {
-		hidden_dentry = h_dptr_i(dentry, bindex);
+		hidden_dentry = au_h_dptr_i(dentry, bindex);
 		if (!hidden_dentry)
 			continue;
-		hidden_file = h_fptr_i(file, bindex);
+		hidden_file = au_h_fptr_i(file, bindex);
 		if (hidden_file) {
 			DEBUG_ON(hidden_file->f_dentry != hidden_dentry);
 			continue;
@@ -82,7 +82,7 @@ static int do_open_dir(struct file *file, int flags)
 	btail = dbtaildir(dentry);
 	set_fbend(file, btail);
 	for (; !err && bindex <= btail; bindex++) {
-		hidden_dentry = h_dptr_i(dentry, bindex);
+		hidden_dentry = au_h_dptr_i(dentry, bindex);
 		if (!hidden_dentry)
 			continue;
 
@@ -154,7 +154,7 @@ static int fsync_dir(struct dentry *dentry, int datasync)
 
 		if (test_ro(sb, bindex, inode))
 			continue;
-		h_dentry = h_dptr_i(dentry, bindex);
+		h_dentry = au_h_dptr_i(dentry, bindex);
 		if (!h_dentry)
 			continue;
 		h_inode = h_dentry->d_inode;
@@ -162,6 +162,7 @@ static int fsync_dir(struct dentry *dentry, int datasync)
 			continue;
 
 		/* cf. fs/nsfd/vfs.c and fs/nfsd/nfs4recover.c */
+		//hdir_lock(h_inode, inode, bindex);
 		i_lock(h_inode);
 		fop = (void*)h_inode->i_fop;
 		err = filemap_fdatawrite(h_inode->i_mapping);
@@ -169,6 +170,7 @@ static int fsync_dir(struct dentry *dentry, int datasync)
 			err = fop->fsync(NULL, h_dentry, datasync);
 		if (!err)
 			err = filemap_fdatawrite(h_inode->i_mapping);
+		//hdir_unlock(h_inode, inode, bindex);
 		i_unlock(h_inode);
 	}
 
@@ -208,20 +210,31 @@ static int aufs_fsync_dir(struct file *file, struct dentry *dentry,
 	if (file) {
 		bend = fbend(file);
 		for (bindex = fbstart(file); !err && bindex <= bend; bindex++) {
-			hidden_file = h_fptr_i(file, bindex);
+			hidden_file = au_h_fptr_i(file, bindex);
 			if (!hidden_file || test_ro(sb, bindex, inode))
 				continue;
 
 			err = -EINVAL;
 			if (hidden_file->f_op && hidden_file->f_op->fsync) {
-				// todo: apparmor thread?
 				// todo: try do_fsync() in fs/sync.c
+#if 0
+				DEBUG_ON(hidden_file->f_dentry->d_inode
+					 != au_h_iptr_i(inode, bindex));
+				hdir_lock(hidden_file->f_dentry->d_inode, inode,
+					  bindex);
+#else
 				i_lock(hidden_file->f_dentry->d_inode);
+#endif
 				err = hidden_file->f_op->fsync
 					(hidden_file, hidden_file->f_dentry,
 					 datasync);
 				//err = -1;
+#if 0
+				hdir_unlock(hidden_file->f_dentry->d_inode,
+					    inode, bindex);
+#else
 				i_unlock(hidden_file->f_dentry->d_inode);
+#endif
 			}
 		}
 	} else
@@ -272,7 +285,7 @@ static int aufs_readdir(struct file *file, void *dirent, filldir_t filldir)
 	//DbgVdir(fvdir_cache(file));// goto out_unlock;
 
  out_unlock:
-	inode->i_atime = h_iptr(inode)->i_atime;
+	inode->i_atime = au_h_iptr(inode)->i_atime;
 	ii_read_unlock(inode);
 	fi_write_unlock(file);
  out:
@@ -374,7 +387,7 @@ static int sio_test_empty(struct dentry *dentry, struct test_empty_arg *arg)
 	struct inode *hidden_inode;
 
 	LKTRTrace("%.*s\n", DLNPair(dentry));
-	hidden_dentry = h_dptr_i(dentry, arg->bindex);
+	hidden_dentry = au_h_dptr_i(dentry, arg->bindex);
 	DEBUG_ON(!hidden_dentry);
 	hidden_inode = hidden_dentry->d_inode;
 	DEBUG_ON(!hidden_inode || !S_ISDIR(hidden_inode->i_mode));
@@ -423,7 +436,7 @@ int au_test_empty_lower(struct dentry *dentry)
 	btail = dbtaildir(dentry);
 	for (bindex = bstart + 1; !err && bindex <= btail; bindex++) {
 		struct dentry *hidden_dentry;
-		hidden_dentry = h_dptr_i(dentry, bindex);
+		hidden_dentry = au_h_dptr_i(dentry, bindex);
 		if (hidden_dentry && hidden_dentry->d_inode) {
 			DEBUG_ON(!S_ISDIR(hidden_dentry->d_inode->i_mode));
 			arg.bindex = bindex;
@@ -454,7 +467,7 @@ int test_empty(struct dentry *dentry, struct aufs_nhash *whlist)
 	btail = dbtaildir(dentry);
 	for (bindex = dbstart(dentry); !err && bindex <= btail; bindex++) {
 		struct dentry *hidden_dentry;
-		hidden_dentry = h_dptr_i(dentry, bindex);
+		hidden_dentry = au_h_dptr_i(dentry, bindex);
 		if (hidden_dentry && hidden_dentry->d_inode) {
 			DEBUG_ON(!S_ISDIR(hidden_dentry->d_inode->i_mode));
 			arg.bindex = bindex;
