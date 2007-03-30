@@ -1,3 +1,10 @@
+aufs (0.0~20070330-2) UNRELEASED; urgency=low
+
+  * NOT RELEASED YET
+  * add myself to uploaders.
+
+ -- Stefan Lippers-Hollmann <s.l-h@gmx.de>  Fri, 30 Mar 2007 21:51:09 +0200
+
 aufs (0.0~20070330-1) unstable; urgency=low
 
   * New upstream release:
