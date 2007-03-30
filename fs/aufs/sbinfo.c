@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: sbinfo.c,v 1.25 2007/03/19 04:31:31 sfjro Exp $ */
+/* $Id: sbinfo.c,v 1.26 2007/03/27 12:51:11 sfjro Exp $ */
 
 #include "aufs.h"
 
@@ -27,26 +27,6 @@ struct aufs_sbinfo *stosi(struct super_block *sb)
 	//DEBUG_ON(sbinfo->si_bend < 0);
 	return sbinfo;
 }
-
-#if 0 // debug
-void MS_SET(struct super_block *sb, unsigned int flg)
-{
-	SiMustWriteLock(sb);
-	stosi(sb)->si_flags |= flg;
-}
-
-void MS_CLR(struct super_block *sb, unsigned int flg)
-{
-	SiMustWriteLock(sb);
-	stosi(sb)->si_flags &= ~flg;
-}
-
-unsigned int IS_MS(struct super_block *sb, unsigned int flg)
-{
-	SiMustAnyLock(sb);
-	return (stosi(sb)->si_flags & flg);
-}
-#endif
 
 aufs_bindex_t sbend(struct super_block *sb)
 {
@@ -76,7 +56,6 @@ int au_sigen_inc(struct super_block *sb)
 	gen = ++stosi(sb)->si_generation;
 	au_update_digen(sb->s_root);
 	sb->s_root->d_inode->i_version++;
-	//smp_mb();
 	return gen;
 }
 
@@ -154,7 +133,7 @@ void au_list_plink(struct super_block *sb)
 
 	TraceEnter();
 	SiMustAnyLock(sb);
-	DEBUG_ON(!IS_MS(sb, MS_PLINK));
+	DEBUG_ON(!au_flag_test(sb, AuFlag_PLINK));
 
 	sbinfo = stosi(sb);
 	plink_list = &sbinfo->si_plink;
@@ -174,7 +153,7 @@ int au_is_plinked(struct super_block *sb, struct inode *inode)
 
 	LKTRTrace("i%lu\n", inode->i_ino);
 	SiMustAnyLock(sb);
-	DEBUG_ON(!IS_MS(sb, MS_PLINK));
+	DEBUG_ON(!au_flag_test(sb, AuFlag_PLINK));
 
 	found = 0;
 	sbinfo = stosi(sb);
@@ -200,7 +179,7 @@ static int plink_name(char *name, int len, struct inode *inode,
 
 	LKTRTrace("i%lu, b%d\n", inode->i_ino, bindex);
 	DEBUG_ON(len != PLINK_NAME_LEN);
-	h_inode = h_iptr_i(inode, bindex);
+	h_inode = au_h_iptr_i(inode, bindex);
 	DEBUG_ON(!h_inode);
 	rlen = snprintf(name, len, "%lu.%lu", inode->i_ino, h_inode->i_ino);
 	DEBUG_ON(rlen >= len);
@@ -227,23 +206,23 @@ struct dentry *lkup_plink(struct super_block *sb, aufs_bindex_t bindex,
 	len = plink_name(tgtname, sizeof(tgtname), inode, bindex);
 
 	// always superio.
-	lkup.nfsmnt = do_mnt_nfs(br->br_mnt);
+	lkup.nfsmnt = au_do_nfsmnt(br->br_mnt);
 	lkup.dlgt = need_dlgt(sb);
-	hi_lock_parent(h_dir);
+	hi_lock_whplink(h_dir);
 	h_dentry = sio_lkup_one(tgtname, h_parent, len, &lkup);
 	i_unlock(h_dir);
 	return h_dentry;
 }
 
 static int do_whplink(char *tgt, int len, struct dentry *h_parent,
-		      struct dentry *h_dentry, struct vfsmount *h_mnt,
+		      struct dentry *h_dentry, struct vfsmount *nfsmnt,
 		      struct super_block *sb)
 {
 	int err;
 	struct dentry *h_tgt;
 	struct inode *h_dir;
 	struct lkup_args lkup = {
-		.nfsmnt = h_mnt,
+		.nfsmnt = nfsmnt,
 		.dlgt	= need_dlgt(sb)
 	};
 
@@ -273,7 +252,7 @@ struct do_whplink_args {
 	int len;
 	struct dentry *h_parent;
 	struct dentry *h_dentry;
-	struct vfsmount *h_mnt;
+	struct vfsmount *nfsmnt;
 	struct super_block *sb;
 };
 
@@ -281,7 +260,7 @@ static void call_do_whplink(void *args)
 {
 	struct do_whplink_args *a = args;
 	*a->errp = do_whplink(a->tgt, a->len, a->h_parent, a->h_dentry,
-			      a->h_mnt, a->sb);
+			      a->nfsmnt, a->sb);
 }
 
 static int whplink(struct dentry *h_dentry, struct inode *inode,
@@ -303,22 +282,21 @@ static int whplink(struct dentry *h_dentry, struct inode *inode,
 	len = plink_name(tgtname, sizeof(tgtname), inode, bindex);
 
 	// always superio.
-	//todo: lockdep
-	hi_lock_parent(h_dir);
-	if (!is_kthread(current)) {
+	hi_lock_whplink(h_dir);
+	if (!au_is_kthread(current)) {
 		struct do_whplink_args args = {
 			.errp		= &err,
 			.tgt		= tgtname,
 			.len		= len,
 			.h_parent	= h_parent,
 			.h_dentry	= h_dentry,
-			.h_mnt		= do_mnt_nfs(br->br_mnt),
+			.nfsmnt		= au_do_nfsmnt(br->br_mnt),
 			.sb		= sb
 		};
 		wkq_wait(call_do_whplink, &args, /*dlgt*/0);
 	} else
 		err = do_whplink(tgtname, len, h_parent, h_dentry,
-				 do_mnt_nfs(br->br_mnt), sb);
+				 au_do_nfsmnt(br->br_mnt), sb);
 	i_unlock(h_dir);
 
 	TraceErr(err);
@@ -335,7 +313,7 @@ void append_plink(struct super_block *sb, struct inode *inode,
 
 	LKTRTrace("i%lu\n", inode->i_ino);
 	SiMustAnyLock(sb);
-	DEBUG_ON(!IS_MS(sb, MS_PLINK));
+	DEBUG_ON(!au_flag_test(sb, AuFlag_PLINK));
 
 	cnt = 0;
 	found = 0;
@@ -391,7 +369,7 @@ void au_put_plink(struct super_block *sb)
 
 	TraceEnter();
 	SiMustWriteLock(sb);
-	DEBUG_ON(!IS_MS(sb, MS_PLINK));
+	DEBUG_ON(!au_flag_test(sb, AuFlag_PLINK));
 
 	sbinfo = stosi(sb);
 	plink_list = &sbinfo->si_plink;
@@ -413,7 +391,7 @@ void half_refresh_plink(struct super_block *sb, aufs_bindex_t br_id)
 
 	TraceEnter();
 	SiMustWriteLock(sb);
-	DEBUG_ON(!IS_MS(sb, MS_PLINK));
+	DEBUG_ON(!au_flag_test(sb, AuFlag_PLINK));
 
 	sbinfo = stosi(sb);
 	plink_list = &sbinfo->si_plink;
@@ -426,7 +404,7 @@ void half_refresh_plink(struct super_block *sb, aufs_bindex_t br_id)
 		bend = ibend(inode);
 		if (bstart >= 0) {
 			for (bindex = bstart; bindex <= bend; bindex++) {
-				if (!h_iptr_i(inode, bindex)
+				if (!au_h_iptr_i(inode, bindex)
 				    || itoid_index(inode, bindex) != br_id)
 					continue;
 				set_h_iptr(inode, bindex, NULL, 0);
@@ -438,7 +416,7 @@ void half_refresh_plink(struct super_block *sb, aufs_bindex_t br_id)
 
 		if (do_put) {
 			for (bindex = bstart; bindex <= bend; bindex++)
-				if (h_iptr_i(inode, bindex)) {
+				if (au_h_iptr_i(inode, bindex)) {
 					do_put = 0;
 					break;
 				}

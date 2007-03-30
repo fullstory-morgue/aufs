@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: inode.c,v 1.16 2007/03/19 04:31:46 sfjro Exp $ */
+/* $Id: inode.c,v 1.17 2007/03/27 12:51:43 sfjro Exp $ */
 
 #include "aufs.h"
 
@@ -39,13 +39,12 @@ int au_refresh_hinode(struct dentry *dentry)
 	sb = dentry->d_sb;
 	new_sz = sizeof(*iinfo->ii_hinode) * (sbend(sb) + 1);
 	iinfo = itoii(inode);
-	p = kzrealloc(iinfo->ii_hinode, sizeof(*p) * (iinfo->ii_bend + 1),
-		      new_sz);
+	p = au_kzrealloc(iinfo->ii_hinode, sizeof(*p) * (iinfo->ii_bend + 1),
+			 new_sz);
 	//p = NULL;
 	if (unlikely(!p))
 		goto out;
 	iinfo->ii_hinode = p;
-	//smp_mb();
 	err = 0;
 	update = 0;
 	p = iinfo->ii_hinode + iinfo->ii_bstart;
@@ -90,12 +89,12 @@ int au_refresh_hinode(struct dentry *dentry)
 		struct inode *hi;
 		struct dentry *hd;
 
-		hd = h_dptr_i(dentry, bindex);
+		hd = au_h_dptr_i(dentry, bindex);
 		if (!hd || !hd->d_inode)
 			continue;
 
 		if (iinfo->ii_bstart <= bindex && bindex <= iinfo->ii_bend) {
-			hi = h_iptr_i(inode, bindex);
+			hi = au_h_iptr_i(inode, bindex);
 			if (hi) {
 				DEBUG_ON(hi != hd->d_inode);
 				continue;
@@ -123,11 +122,10 @@ int au_refresh_hinode(struct dentry *dentry)
 			break;
 		}
 
-	if (first != h_iptr(inode))
+	if (first != au_h_iptr(inode))
 		au_cpup_attr_all(inode);
 	if (update && isdir)
 		inode->i_version++;
-	// smp_mb();
 
  out:
 	TraceErr(err);
@@ -145,9 +143,9 @@ static int set_inode(struct inode *inode, struct dentry *dentry)
 	unsigned int flags;
 
 	LKTRTrace("i%lu, %.*s\n", inode->i_ino, DLNPair(dentry));
-	//IMustLock(inode);
+	DEBUG_ON(!(inode->i_state & I_NEW));
 	IiMustWriteLock(inode);
-	hidden_dentry = h_dptr(dentry);
+	hidden_dentry = au_h_dptr(dentry);
 	DEBUG_ON(!hidden_dentry);
 	hidden_inode = hidden_dentry->d_inode;
 	DEBUG_ON(!hidden_inode);
@@ -188,7 +186,7 @@ static int set_inode(struct inode *inode, struct dentry *dentry)
 	iinfo->ii_bstart = bstart;
 	iinfo->ii_bend = btail;
 	for (bindex = bstart; bindex <= btail; bindex++) {
-		hidden_dentry = h_dptr_i(dentry, bindex);
+		hidden_dentry = au_h_dptr_i(dentry, bindex);
 		if (!hidden_dentry)
 			continue;
 		DEBUG_ON(!hidden_dentry->d_inode);
@@ -202,7 +200,7 @@ static int set_inode(struct inode *inode, struct dentry *dentry)
 }
 
 /* successful returns with iinfo write_locked */
-struct inode *aufs_new_inode(struct dentry *dentry)
+struct inode *au_new_inode(struct dentry *dentry)
 {
 	struct inode *inode, *hidden_inode;
 	struct dentry *hidden_dentry;
@@ -213,7 +211,7 @@ struct inode *aufs_new_inode(struct dentry *dentry)
 
 	LKTRTrace("%.*s\n", DLNPair(dentry));
 	sb = dentry->d_sb;
-	hidden_dentry = h_dptr(dentry);
+	hidden_dentry = au_h_dptr(dentry);
 	DEBUG_ON(!hidden_dentry);
 	hidden_inode = hidden_dentry->d_inode;
 	DEBUG_ON(!hidden_inode);
@@ -242,7 +240,6 @@ struct inode *aufs_new_inode(struct dentry *dentry)
 		sb->s_op->read_inode(inode);
 
 	err = 0;
-	//i_lock_new(inode);
 	ii_write_lock_new(inode);
 	bindex = ibstart(inode);
 	if (inode->i_state & I_NEW) {
@@ -250,14 +247,14 @@ struct inode *aufs_new_inode(struct dentry *dentry)
 		//err = -1;
 		unlock_new_inode(inode);
 #if 1 // test
-	} else if (unlikely(bindex >= 0 && IS_MS(sb, MS_UDBA_INOTIFY))) {
+	} else if (unlikely(bindex >= 0
+			    && au_flag_test(sb, AuFlag_UDBA_INOTIFY))) {
 		int found = 0;
 		aufs_bindex_t bend = ibend(inode);
 		for (; !found && bindex <= bend; bindex++)
-			found = (hidden_inode == h_iptr_i(inode, bindex));
+			found = (hidden_inode == au_h_iptr_i(inode, bindex));
 		if (unlikely(!found)) {
 			ii_write_unlock(inode);
-			//i_unlock(inode);
 			iput(inode);
 			err = xino_write(sb, bstart, hidden_ino, /*ino*/0);
 			if (unlikely(err))
@@ -266,7 +263,6 @@ struct inode *aufs_new_inode(struct dentry *dentry)
 		}
 #endif
 	}
-	//i_unlock(inode);
 	if (!err)
 		return inode; /* success */
 

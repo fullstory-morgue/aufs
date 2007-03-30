@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: file.h,v 1.20 2007/03/19 04:30:31 sfjro Exp $ */
+/* $Id: file.h,v 1.21 2007/03/27 12:46:34 sfjro Exp $ */
 
 #ifndef __AUFS_FILE_H__
 #define __AUFS_FILE_H__
@@ -55,33 +55,9 @@ struct aufs_finfo {
 	};
 };
 
-#define fi_read_lock(f) \
-	rw_read_lock(&ftofi(f)->fi_rwsem, AUFS_LSC_FINFO)
-#define fi_read_unlock(f)	rw_read_unlock(&ftofi(f)->fi_rwsem)
-#define fi_downgrade_lock(f)	rw_dgrade_lock(&ftofi(f)->fi_rwsem)
-#define fi_write_lock(f) \
-	rw_write_lock(&ftofi(f)->fi_rwsem, AUFS_LSC_FINFO)
-#define fi_write_unlock(f)	rw_write_unlock(&ftofi(f)->fi_rwsem)
-
-/* debug macro. use with caution */
-#define FiMustReadLock(f)	do { \
-	SiMustAnyLock((f)->f_dentry->d_sb); \
-	RwMustReadLock(&ftofi(f)->fi_rwsem); \
-	} while(0)
-#define FiMustWriteLock(f)	do { \
-	SiMustAnyLock((f)->f_dentry->d_sb); \
-	RwMustWriteLock(&ftofi(f)->fi_rwsem); \
-	} while(0)
-#define FiMustAnyLock(f)	do { \
-	SiMustAnyLock((f)->f_dentry->d_sb); \
-	RwMustAnyLock(&ftofi(f)->fi_rwsem); \
-	} while(0)
-
-#define figen(f)	atomic_read(&ftofi(f)->fi_generation)
-#define is_mmapped(f)	({(int)ftofi(f)->fi_h_vm_ops;})
-
 /* ---------------------------------------------------------------------- */
 
+// file.c
 extern struct address_space_operations aufs_aop;
 unsigned int au_file_roflags(unsigned int flags);
 struct file *hidden_open(struct dentry *dentry, aufs_bindex_t bindex,
@@ -107,8 +83,8 @@ aufs_bindex_t fbstart(struct file *file);
 aufs_bindex_t fbend(struct file *file);
 struct aufs_vdir *fvdir_cache(struct file *file);
 struct aufs_branch *ftobr(struct file *file, aufs_bindex_t bindex);
-struct file *h_fptr_i(struct file *file, aufs_bindex_t bindex);
-struct file *h_fptr(struct file *file);
+struct file *au_h_fptr_i(struct file *file, aufs_bindex_t bindex);
+struct file *au_h_fptr(struct file *file);
 
 void set_fbstart(struct file *file, aufs_bindex_t bindex);
 void set_fbend(struct file *file, aufs_bindex_t bindex);
@@ -118,6 +94,63 @@ void au_update_figen(struct file *file);
 
 void au_fin_finfo(struct file *file);
 int au_init_finfo(struct file *file);
+
+/* ---------------------------------------------------------------------- */
+
+static inline int au_figen(struct file *f)
+{
+	return atomic_read(&ftofi(f)->fi_generation);
+}
+
+static inline int au_is_mmapped(struct file *f)
+{
+	return (int)ftofi(f)->fi_h_vm_ops;
+}
+
+/* ---------------------------------------------------------------------- */
+
+static inline void fi_read_lock(struct file *f)
+{
+	rw_read_lock(&ftofi(f)->fi_rwsem);
+}
+
+static inline void fi_read_unlock(struct file *f)
+{
+	rw_read_unlock(&ftofi(f)->fi_rwsem);
+}
+
+static inline void fi_downgrade_lock(struct file *f)
+{
+	rw_dgrade_lock(&ftofi(f)->fi_rwsem);
+}
+
+static inline void fi_write_lock(struct file *f)
+{
+	rw_write_lock(&ftofi(f)->fi_rwsem);
+}
+
+static inline void fi_write_unlock(struct file *f)
+{
+	rw_write_unlock(&ftofi(f)->fi_rwsem);
+}
+
+static inline void FiMustReadLock(struct file *f)
+{
+	SiMustAnyLock(f->f_dentry->d_sb);
+	RwMustReadLock(&ftofi(f)->fi_rwsem);
+}
+
+static inline void FiMustWriteLock(struct file *f)
+{
+	SiMustAnyLock(f->f_dentry->d_sb);
+	RwMustWriteLock(&ftofi(f)->fi_rwsem);
+}
+
+static inline void FiMustAnyLock(struct file *f)
+{
+	SiMustAnyLock(f->f_dentry->d_sb);
+	RwMustAnyLock(&ftofi(f)->fi_rwsem);
+}
 
 #endif /* __KERNEL__ */
 #endif /* __AUFS_FILE_H__ */

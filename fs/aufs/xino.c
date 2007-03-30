@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: xino.c,v 1.21 2007/03/19 04:31:31 sfjro Exp $ */
+/* $Id: xino.c,v 1.22 2007/03/27 12:51:44 sfjro Exp $ */
 
 //#include <linux/fs.h>
 #include <linux/fsnotify.h>
@@ -64,7 +64,6 @@ static ssize_t fread(readf_t func, struct file *file, void *buf, size_t size,
 		err = func(file, (char __user*)buf, size, pos);
 	} while (err == -EAGAIN || err == -EINTR);
 	set_fs(oldfs);
-	//smp_mb();
 
 #if 0
 	if (err > 0)
@@ -127,14 +126,14 @@ static ssize_t fwrite(writef_t func, struct file *file, void *buf, size_t size,
 	 * it breaks RLIMIT_FSIZE and normal user's limit,
 	 * users should care about quota and real 'filesystem full.'
 	 */
-	if (!is_kthread(current)) {
+	if (!au_is_kthread(current)) {
 		struct do_fwrite_args args = {
 			.errp	= &err,
 			.func	= func,
 			.file	= file,
 			.buf	= buf,
 			.size	= size,
-			.pos	= pos,
+			.pos	= pos
 		};
 		wkq_wait(call_do_fwrite, &args, /*dlgt*/0);
 	} else
@@ -153,7 +152,7 @@ struct file *xino_create(struct super_block *sb, char *fname, int silent,
 	int err;
 	struct dentry *hidden_parent;
 	struct inode *hidden_dir;
-	const int udba = IS_MS(sb, MS_UDBA_INOTIFY);
+	const int udba = au_flag_test(sb, AuFlag_UDBA_INOTIFY);
 
 	LKTRTrace("%s\n", fname);
 
@@ -168,7 +167,7 @@ struct file *xino_create(struct super_block *sb, char *fname, int silent,
 		return file;
 	}
 	if (unlikely(udba && parent))
-		direval_dec(parent);
+		au_direval_dec(parent);
 
 	/* keep file count */
 	hidden_parent = dget_parent(file->f_dentry);
@@ -176,7 +175,7 @@ struct file *xino_create(struct super_block *sb, char *fname, int silent,
 	hi_lock_parent(hidden_dir);
 	err = vfsub_unlink(hidden_dir, file->f_dentry, /*dlgt*/0);
 	if (unlikely(udba && parent))
-		direval_dec(parent);
+		au_direval_dec(parent);
 	i_unlock(hidden_dir);
 	dput(hidden_parent);
 	if (unlikely(err)) {
@@ -213,7 +212,7 @@ int xino_write(struct super_block *sb, aufs_bindex_t bindex, ino_t hidden_ino,
 
 	LKTRTrace("b%d, hi%lu, i%lu\n", bindex, hidden_ino, ino);
 	//DEBUG_ON(!ino);
-	if (unlikely(!IS_MS(sb, MS_XINO)))
+	if (unlikely(!au_flag_test(sb, AuFlag_XINO)))
 		return 0;
 
 	br = stobr(sb, bindex);
@@ -228,7 +227,7 @@ int xino_write(struct super_block *sb, aufs_bindex_t bindex, ino_t hidden_ino,
 	return -EIO;
 }
 
-// why atomic_long_inc_return is not defined?
+// why is not atomic_long_inc_return defined?
 #if BITS_PER_LONG == 64
 #define atomic_long_inc_return(a)	atomic64_inc_return(a)
 #else
@@ -249,7 +248,7 @@ int xino_read(struct super_block *sb, aufs_bindex_t bindex, ino_t hidden_ino,
 	struct aufs_branch *br;
 
 	LKTRTrace("b%d, hi%lu, force %d\n", bindex, hidden_ino, force);
-	if (unlikely(!IS_MS(sb, MS_XINO))) {
+	if (unlikely(!au_flag_test(sb, AuFlag_XINO))) {
 		*ino = iunique(sb, AUFS_FIRST_INO);
 		if (*ino >= AUFS_FIRST_INO)
 			return 0;
@@ -393,7 +392,7 @@ int xino_init(struct super_block *sb, aufs_bindex_t bindex,
 	LKTRTrace("b%d, base_file %p, do_test %d\n",
 		  bindex, base_file, do_test);
 	SiMustWriteLock(sb);
-	DEBUG_ON(!IS_MS(sb, MS_XINO));
+	DEBUG_ON(!au_flag_test(sb, AuFlag_XINO));
 	br = stobr(sb, bindex);
 	DEBUG_ON(br->br_xino);
 
@@ -434,7 +433,7 @@ int xino_init(struct super_block *sb, aufs_bindex_t bindex,
 		goto out_put;
 
 	inode = sb->s_root->d_inode;
-	hidden_inode = h_iptr_i(inode, bindex);
+	hidden_inode = au_h_iptr_i(inode, bindex);
 	err = xino_write(sb, bindex, hidden_inode->i_ino, inode->i_ino);
 	//if (LktrCond) err = -1;
 	if (!err)
@@ -475,7 +474,7 @@ int xino_set(struct super_block *sb, struct opt_xino *xino, int remount)
 	    && !memcmp(name->name, cur_xino->f_dentry->d_name.name, name->len))
 		goto out;
 
-	MS_SET(sb, MS_XINO);
+	au_flag_set(sb, AuFlag_XINO);
 	bend = sbend(sb);
 	for (bindex = bend; bindex >= 0; bindex--) {
 		br = stobr(sb, bindex);
@@ -528,7 +527,7 @@ int xino_set(struct super_block *sb, struct opt_xino *xino, int remount)
 				continue;
 			IOErr("creating xino for branch %d(%d), "
 			      "forcing noxino\n", bindex, err);
-			MS_CLR(sb, MS_XINO);
+			au_flag_clr(sb, AuFlag_XINO);
 			err = -EIO;
 			break;
 		}
@@ -558,7 +557,7 @@ int xino_clr(struct super_block *sb)
 		}
 	}
 
-	MS_CLR(sb, MS_XINO);
+	au_flag_clr(sb, AuFlag_XINO);
 	return 0;
 }
 
@@ -574,8 +573,8 @@ struct file *xino_def(struct super_block *sb)
 	bend = sbend(sb);
 	bwr = -1;
 	for (bindex = 0; bindex <= bend; bindex++)
-		if ((sbr_perm(sb, bindex) & MAY_WRITE)
-		    && !SB_NFS(h_dptr_i(sb->s_root, bindex)->d_sb)) {
+		if (sbr_perm(sb, bindex) == AuBrPerm_RW
+		    && !au_is_nfs(au_h_dptr_i(sb->s_root, bindex)->d_sb)) {
 			bwr = bindex;
 			break;
 		}
@@ -587,7 +586,7 @@ struct file *xino_def(struct super_block *sb)
 		//if (LktrCond) {__putname(page); page = NULL;}
 		if (unlikely(!page))
 			goto out;
-		p = d_path(h_dptr_i(sb->s_root, bwr), sbr_mnt(sb, bwr), page,
+		p = d_path(au_h_dptr_i(sb->s_root, bwr), sbr_mnt(sb, bwr), page,
 			   PATH_MAX - sizeof(AUFS_XINO_FNAME));
 		//if (LktrCond) p = ERR_PTR(-1);
 		file = (void*)p;

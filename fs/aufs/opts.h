@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: opts.h,v 1.9 2007/02/26 02:28:28 sfjro Exp $ */
+/* $Id: opts.h,v 1.10 2007/03/27 12:47:36 sfjro Exp $ */
 
 #ifndef __AUFS_OPTS_H__
 #define __AUFS_OPTS_H__
@@ -30,7 +30,7 @@
 struct opt_add {
 	aufs_bindex_t		bindex;
 	char			*path;
-	unsigned int		perm;
+	int			perm;
 	struct nameidata	nd;
 };
 
@@ -41,7 +41,7 @@ struct opt_del {
 
 struct opt_mod {
 	char		*path;
-	unsigned int	perm;
+	int		perm;
 	struct dentry	*h_root;
 };
 
@@ -73,13 +73,13 @@ struct opts {
 
 /* ---------------------------------------------------------------------- */
 
-int br_perm_str(char *p, int len, unsigned int perm);
+int br_perm_str(char *p, int len, int perm);
 char *udba_str(int udba);
 //char *coo_str(int coo);
-void free_opts(struct opts *opts);
-int parse_opts(struct super_block *sb, char *str, struct opts *opts,
-	       int remount);
-int do_opts(struct super_block *sb, struct opts *opts, int remount);
+void au_free_opts(struct opts *opts);
+int au_parse_opts(struct super_block *sb, char *str, struct opts *opts,
+		  int remount);
+int au_do_opts(struct super_block *sb, struct opts *opts, int remount);
 
 #endif /* __KERNEL__ */
 #endif /* __AUFS_OPTS_H__ */

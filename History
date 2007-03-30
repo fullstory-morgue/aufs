@@ -2,7 +2,7 @@
 History of aufs
 Junjiro Okajima
 
-# $Id: History,v 1.11 2007/03/20 07:31:02 sfjro Exp $
+# $Id: History,v 1.13 2007/03/28 01:56:42 sfjro Exp $
 
 Note:
 - the described date are all in JST.
@@ -12,6 +12,40 @@ Note:
   failed. this is the main reason to begin writing this file.
 
 ----------------------------------------------------------------------
+
+20070328
+- bugfix: forgot include one header in misc.h
+
+20070327
+- bugfix: increment sbinfo generation in cases of br_mod() for sensing
+  whiteout, xino/noxino and udba=inotify, too. introducing
+  au_is_whable() and sbr_is_whable(). call au_sigen_inc() from
+  do_opts(), reported by Jorgen P. Tjerno.
+- support sysfs and NFS-exporting, introducing sysaufs.c,
+  CONFIG_AUFS_SYSAUFS, export.c, CONFIG_AUFS_EXPORT and a new module
+  parameter 'brs.'
+- remove AUFS_DEBUG_RWSEM.
+- workaround an application bug when 'dlgt' is specified.
+  generally, read(2) or write(2) may return the value shorter
+  than requested. But many applications don't support it,
+  for example bash.
+- support file gid when 'dlgt' is set.
+- add a note about SMP.
+- add a note about lockdep, still testing.
+- add a note about performance test.
+- convert branch permission bits into an integer.
+- add an branch mode alias 'rowh' which is equivalent to 'ro+wh.'
+- macro functions are converted to inline function.
+- rename some symbols.
+- merge hidden_notify_change() into vfsub_notify_change().
+- convert the type of aufs_nwkq to short, since linux/kernel/params.c
+  prints as '%c' for 'byte'.
+- accounting in workqueue, refine the algorithm of choosing the thread.
+- refined LHASH_PATCH and DLGT condition for lkup_one() and lkup_hash().
+- refine file read/write when 'dlgt' is specified.
+- refine DLGT condition for minor optimization.
+- stop setting the first branch mode to 'rw' by default, when the mount
+  flag is 'ro.'
 
 20070320
 - bugfix: brokn df(1)/statfs(2), wrong argument for vfs_statfs().

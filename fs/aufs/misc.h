@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: misc.h,v 1.19 2007/03/19 04:33:05 sfjro Exp $ */
+/* $Id: misc.h,v 1.21 2007/03/28 01:46:16 sfjro Exp $ */
 
 #ifndef __AUFS_MISC_H__
 #define __AUFS_MISC_H__
@@ -27,113 +27,129 @@
 #ifdef __KERNEL__
 
 #include <linux/namei.h>
+#include <linux/sched.h>
 
 struct aufs_rwsem {
-#ifdef CONFIG_AUFS_DEBUG_RWSEM
-	struct mutex		mutex;
-#else
 	struct rw_semaphore	rwsem;
 #ifdef CONFIG_AUFS_DEBUG
 	atomic_t		rcnt;
-#endif
+#define rcnt_init(rw)		atomic_set(&(rw)->rcnt, 0)
+#define rcnt_inc(rw)		atomic_inc(&(rw)->rcnt)
+#define rcnt_dec(rw)		atomic_dec(&(rw)->rcnt)
+#else
+#define rcnt_init(rw)		/* */
+#define rcnt_inc(rw)		/* */
+#define rcnt_dec(rw)		/* */
 #endif
 };
 
-#define MtxMustLock(mtx)	DEBUG_ON(!mutex_is_locked(mtx))
-
-/* use with caution */
-#ifdef CONFIG_AUFS_DEBUG_RWSEM
-static inline void rw_init_wlock(struct aufs_rwsem *rw, unsigned int lsc)
-{
-	mutex_init(&(rw)->mutex);
-	mutex_lock_nested(&(rw)->mutex, lsc);
-}
-#define rw_init_nolock(rw)	mutex_init(&(rw)->mutex)
-#define rw_destroy(rw)		mutex_destroy(&(rw)->mutex)
-#define rw_read_lock(rw, lsc)	mutex_lock_nested(&(rw)->mutex, lsc)
-#define rw_read_unlock(rw)	mutex_unlock(&(rw)->mutex)
-#define rw_dgrade_lock(rw)	/* */
-#define rw_write_lock(rw, lsc)	rw_read_lock(rw, lsc)
-#define rw_write_unlock(rw)	rw_read_unlock(rw)
-#define RwMustAnyLock(rw)	MtxMustLock(&(rw)->mutex)
-#define RwMustReadLock(rw)	RwMustAnyLock(rw)
-#define RwMustWriteLock(rw)	RwMustAnyLock(rw)
-#define RwMustNoWaiters(rw)	DEBUG_ON(!list_empty(&(rw)->mutex.wait_list))
-#else /* CONFIG_AUFS_DEBUG_RWSEM */
-
-#ifdef CONFIG_AUFS_DEBUG
-static inline void rw_init_wlock(struct aufs_rwsem *rw, unsigned int lsc)
-{
-	init_rwsem(&(rw)->rwsem);
-	down_write_nested(&(rw)->rwsem, lsc);
-	atomic_set(&(rw)->rcnt, 0);
-}
 static inline void rw_init_nolock(struct aufs_rwsem *rw)
 {
-	init_rwsem(&(rw)->rwsem);
-	atomic_set(&(rw)->rcnt, 0);
+	init_rwsem(&rw->rwsem);
+	rcnt_init(rw);
 }
-static inline void rw_read_lock(struct aufs_rwsem *rw, unsigned int lsc)
+
+static inline void rw_init_wlock(struct aufs_rwsem *rw)
 {
-	down_read_nested(&(rw)->rwsem, lsc);
-	atomic_inc(&(rw)->rcnt);
+	rw_init_nolock(rw);
+	down_write(&rw->rwsem);
 }
+
+static inline void rw_init_wlock_nested(struct aufs_rwsem *rw, unsigned int lsc)
+{
+	rw_init_nolock(rw);
+	down_write_nested(&rw->rwsem, lsc);
+}
+
+static inline void rw_read_lock(struct aufs_rwsem *rw)
+{
+	down_read(&rw->rwsem);
+	rcnt_inc(rw);
+}
+
+static inline void rw_read_lock_nested(struct aufs_rwsem *rw, unsigned int lsc)
+{
+	down_read_nested(&rw->rwsem, lsc);
+	rcnt_inc(rw);
+}
+
 static inline void rw_read_unlock(struct aufs_rwsem *rw)
 {
-	atomic_dec(&(rw)->rcnt);
-	up_read(&(rw)->rwsem);
+	rcnt_dec(rw);
+	up_read(&rw->rwsem);
 }
+
 static inline void rw_dgrade_lock(struct aufs_rwsem *rw)
 {
-	atomic_inc(&(rw)->rcnt);
-	downgrade_write(&(rw)->rwsem);
+	rcnt_inc(rw);
+	downgrade_write(&rw->rwsem);
 }
-#else
-static inline void rw_init_wlock(struct aufs_rwsem *rw, unsigned int lsc)
+
+static inline void rw_write_lock(struct aufs_rwsem *rw)
 {
-	init_rwsem(&(rw)->rwsem);
-	down_write_nested(&(rw)->rwsem, lsc);
+	down_write(&rw->rwsem);
 }
-#define rw_init_nolock(rw)	init_rwsem(&(rw)->rwsem)
-#define rw_read_lock(rw, lsc)	down_read_nested(&(rw)->rwsem, lsc)
-#define rw_read_unlock(rw)	up_read(&(rw)->rwsem)
-#define rw_dgrade_lock(rw)	downgrade_write(&(rw)->rwsem)
-#endif /* CONFIG_AUFS_DEBUG */
 
-#define rw_destroy(rw)		/* */
-#define rw_write_lock(rw, lsc)	down_write_nested(&(rw)->rwsem, lsc)
-#define rw_write_unlock(rw)	up_write(&(rw)->rwsem)
-#define RwMustAnyLock(rw)	DEBUG_ON(down_write_trylock(&(rw)->rwsem))
+static inline void rw_write_lock_nested(struct aufs_rwsem *rw, unsigned int lsc)
+{
+	down_write_nested(&rw->rwsem, lsc);
+}
 
-/* use with caution */
-#define RwMustReadLock(rw)	do { \
-	RwMustAnyLock(rw); \
-	DEBUG_ON(!atomic_read(&(rw)->rcnt)); \
-	} while(0)
-#define RwMustWriteLock(rw)	do { \
-	RwMustAnyLock(rw); \
-	DEBUG_ON(atomic_read(&(rw)->rcnt)); \
-	} while(0)
+static inline void rw_write_unlock(struct aufs_rwsem *rw)
+{
+	up_write(&rw->rwsem);
+}
 
-#define RwMustNoWaiters(rw)	DEBUG_ON(!list_empty(&(rw)->rwsem.wait_list))
-#endif /* CONFIG_AUFS_DEBUG_RWSEM */
+static inline void RwMustAnyLock(struct aufs_rwsem *rw)
+{
+	DEBUG_ON(down_write_trylock(&rw->rwsem));
+}
+
+static inline void RwMustReadLock(struct aufs_rwsem *rw)
+{
+	RwMustAnyLock(rw);
+#ifdef CONFIG_AUFS_DEBUG
+	DEBUG_ON(!atomic_read(&rw->rcnt));
+#endif
+}
+
+static inline void RwMustWriteLock(struct aufs_rwsem *rw)
+{
+	RwMustAnyLock(rw);
+#ifdef CONFIG_AUFS_DEBUG
+	DEBUG_ON(atomic_read(&rw->rcnt));
+#endif
+}
+
+static inline void RwMustNoWaiters(struct aufs_rwsem *rw)
+{
+	DEBUG_ON(!list_empty(&rw->rwsem.wait_list));
+}
+
+#undef rcnt_init
+#undef rcnt_inc
+#undef rcnt_dec
 
 /* ---------------------------------------------------------------------- */
 
 typedef ssize_t (*readf_t)(struct file*, char __user*, size_t, loff_t*);
 typedef ssize_t (*writef_t)(struct file*, const char __user*, size_t, loff_t*);
 
-// todo: remove this
-int hidden_notify_change(struct dentry *h_dentry, struct iattr *ia,
-			 struct dentry *dentry, int do_bath);
-void *kzrealloc(void *p, int nused, int new_sz);
+void *au_kzrealloc(void *p, int nused, int new_sz);
 struct nameidata *fake_dm(struct nameidata *fake_nd, struct nameidata *nd,
 			  struct super_block *sb, aufs_bindex_t bindex);
 void fake_dm_release(struct nameidata *fake_nd);
 int au_copy_file(struct file *dst, struct file *src, loff_t len,
 		 struct super_block *sb, int *sparse);
 int test_ro(struct super_block *sb, aufs_bindex_t bindex, struct inode *inode);
-int au_test_perm(struct inode *h_inode, int mask, int do_bath);
+int au_test_perm(struct inode *h_inode, int mask, int dlgt);
+
+/* ---------------------------------------------------------------------- */
+
+static inline int au_is_kthread(struct task_struct *tsk)
+{
+	return !tsk->mm;
+}
 
 #endif /* __KERNEL__ */
 #endif /* __AUFS_MISC_H__ */

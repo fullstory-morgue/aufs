@@ -1,5 +1,5 @@
 
-/* $Id: Kconfig.in,v 1.5 2007/03/19 04:34:07 sfjro Exp $ */
+/* $Id: Kconfig.in,v 1.6 2007/03/27 12:43:51 sfjro Exp $ */
 
 #include <linux/version.h>
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,18)
@@ -56,7 +56,7 @@ config AUFS_BRANCH_MAX_32767
 	HELP
 endchoice
 
-#if 0 //LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,18)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,18)
 config AUFS_SYSAUFS
 	bool "Use <sysfs>/fs/aufs"
 	depends on SYSFS
@@ -81,15 +81,14 @@ config AUFS_HINOTIFY
 	If you want to modify files on branches directly, eg. bypassing aufs,
 	and want aufs to detect the changes of them fully, then enable this
 	option and use 'udba=inotify' mount option.
-	It may damage the performance.
+	It will damage the performance.
 	See detail in aufs.5.
-	Caution: if you enable AUFS_DEBUG_RWSEM, you cannot use 'udba=inotify.'
 
 comment "INOTIFY and AUFS_HINOTIFY are disabled"
 	depends on INOTIFY = n
 #endif
 
-#if 0 //LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,18)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,18)
 config AUFS_EXPORT
 	bool "NFS-exportable aufs"
 	depends on EXPORTFS
@@ -113,7 +112,7 @@ config AUFS_DLGT
 	issued by your application from your LSM or something or make your
 	application to be traced strictly by the task I/O accounting,
 	then enable this option and use 'dlgt' mount option.
-	It may damage the performance.
+	It will damage the performance.
 	See detail in aufs.5.
 #endif
 
@@ -151,14 +150,7 @@ config AUFS_DEBUG
 	default y
 	help
 	Enable this to compile aufs internal debug code.
-
-config AUFS_DEBUG_RWSEM
-	bool "Debug rwsem in aufs"
-	default n
-	help
-	Enable this to compile aufs internal debugging specific to rwsem. Much
-	slower.
-	Caution: if you enable AUFS_DEBUG_RWSEM, you cannot use 'udba=inotify.'
+	The performance will be damaged.
 
 config AUFS_COMPAT
 	bool "Compatibility with Unionfs (obsolete)"

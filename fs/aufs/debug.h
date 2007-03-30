@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: debug.h,v 1.24 2007/03/19 04:30:52 sfjro Exp $ */
+/* $Id: debug.h,v 1.25 2007/03/27 12:45:59 sfjro Exp $ */
 
 #ifndef __AUFS_DEBUG_H__
 #define __AUFS_DEBUG_H__
@@ -30,6 +30,11 @@
 #else
 #define DEBUG_ON(a)	/* */
 #endif
+
+static inline void MtxMustLock(struct mutex *mtx)
+{
+	DEBUG_ON(!mutex_is_locked(mtx));
+}
 
 /* ---------------------------------------------------------------------- */
 
@@ -110,99 +115,6 @@ void au_dpri_sb(struct super_block *sb);
 #define DbgDentry(d)		/* */
 #define DbgFile(f)		/* */
 #define DbgSb(sb)		/* */
-#endif
-
-/* ---------------------------------------------------------------------- */
-
-#ifndef MAX_LOCKDEP_SUBCLASSES
-#define MAX_LOCKDEP_SUBCLASSES 8
-#define RemoveMe
-#endif
-
-#if MAX_LOCKDEP_SUBCLASSES == 32
-/* lock subclass. or you may think it represents aufs locking order */
-enum {
-	AufsLscBegin = I_MUTEX_QUOTA,	// last defined in inode mutex
-	AUFS_LSC_SBILIST_SYSFS,		// access to sysfs
-	AUFS_LSC_SBINFO_NFS,		// access from nfsd
-	AUFS_LSC_SBINFO_HINOTIFY,	// udba=inotify
-	AUFS_LSC_SBINFO,
-	AUFS_LSC_FINFO,
-	AUFS_LSC_DINFO_CHILD,	// child first
-	AUFS_LSC_IINFO_CHILD,
-	AUFS_LSC_DINFO_CHILD2,	// rename(2), link(2), and cpup at hinotify
-	AUFS_LSC_IINFO_CHILD2,
-	AUFS_LSC_DINFO_CHILD3,	// copyup dirs
-	AUFS_LSC_IINFO_CHILD3,
-	AUFS_LSC_DINFO_PARENT,
-	AUFS_LSC_IINFO_PARENT,
-	AUFS_LSC_DINFO_PARENT2,	// rename(2), link(2), and cpup at hinotify
-	AUFS_LSC_IINFO_PARENT2,
-	AUFS_LSC_DINFO_PARENT3,	// copyup dirs
-	AUFS_LSC_IINFO_PARENT3,
-	AUFS_LSC_H_GPARENT,	// setattr with inotify
-	AUFS_LSC_H_PARENT,	// hidden inode, parent first
-	//AUFS_LSC_INODE_NEW,
-	AUFS_LSC_IINFO_NEW,
-	AUFS_LSC_H_CHILD,
-	AUFS_LSC_H_PARENT2,
-	AUFS_LSC_H_CHILD2,
-	AUFS_LSC_BR_WH,
-	AUFS_LSC_PLINK,
-	AUFS_LSC_SBILIST,
-	AufsLscEnd
-};
-#else
-enum {
-	AUFS_LSC_SBILIST_SYSFS,
-	AUFS_LSC_SBILIST
-};
-enum {
-	AUFS_LSC_SBINFO_NFS,
-	AUFS_LSC_SBINFO_HINOTIFY,
-	AUFS_LSC_SBINFO
-};
-enum {
-	AUFS_LSC_FINFO
-};
-enum {
-	AUFS_LSC_DINFO_CHILD,
-	AUFS_LSC_DINFO_CHILD2,
-	AUFS_LSC_DINFO_CHILD3,
-	AUFS_LSC_DINFO_PARENT,
-	AUFS_LSC_DINFO_PARENT2,
-	AUFS_LSC_DINFO_PARENT3
-};
-enum {
-	AUFS_LSC_IINFO_CHILD,
-	AUFS_LSC_IINFO_CHILD2,
-	AUFS_LSC_IINFO_CHILD3,
-	AUFS_LSC_IINFO_PARENT,
-	AUFS_LSC_IINFO_PARENT2,
-	AUFS_LSC_IINFO_PARENT3,
-	AUFS_LSC_IINFO_NEW
-};
-// default MAX_LOCKDEP_SUBCLASSES(8) is not enough
-enum {
-	AufsLscBegin = I_MUTEX_QUOTA,
-	AUFS_LSC_H_GPARENT,
-	AUFS_LSC_H_PARENT,
-	//AUFS_LSC_INODE_NEW,
-	AUFS_LSC_H_CHILD,
-	AUFS_LSC_H_PARENT2,
-	AUFS_LSC_H_CHILD2,
-	AufsLscEnd
-};
-enum {
-	AUFS_LSC_BR_WH
-};
-enum {
-	AUFS_LSC_PLINK
-};
-#endif
-
-#ifdef RemoveMe
-#undef MAX_LOCKDEP_SUBCLASSES
 #endif
 
 #endif /* __KERNEL__ */

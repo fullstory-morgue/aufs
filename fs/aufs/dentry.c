@@ -16,14 +16,15 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: dentry.c,v 1.34 2007/03/19 04:31:31 sfjro Exp $ */
+/* $Id: dentry.c,v 1.35 2007/03/27 12:48:50 sfjro Exp $ */
 
 //#include <linux/fs.h>
 //#include <linux/namei.h>
 #include "aufs.h"
 
-//todo: refine this condition
-#if defined(CONFIG_AUFS_LHASH_PATCH) || defined(CONFIG_AUFS_DLGT)
+#ifdef CONFIG_AUFS_LHASH_PATCH
+
+#ifdef CONFIG_AUFS_DLGT
 struct lookup_hash_args {
 	struct dentry **errp;
 	struct qstr *name;
@@ -36,23 +37,10 @@ static void call_lookup_hash(void *args)
 	struct lookup_hash_args *a = args;
 	*a->errp = __lookup_hash(a->name, a->base, a->nd);
 }
+#endif /* CONFIG_AUFS_DLGT */
 
-struct lookup_one_len_args {
-	struct dentry **errp;
-	const char *name;
-	struct dentry *parent;
-	int len;
-};
-
-static void call_lookup_one_len(void *args)
-{
-	struct lookup_one_len_args *a = args;
-	*a->errp = lookup_one_len(a->name, a->parent, a->len);
-}
-
-/* cf. lookup_one_len() in linux/fs/namei.c */
-struct dentry *lkup_one(const char *name, struct dentry *parent, int len,
-			struct lkup_args *lkup)
+static struct dentry *lkup_hash(const char *name, struct dentry *parent,
+				int len, struct lkup_args *lkup)
 {
 	struct dentry *dentry;
 	char *p;
@@ -60,26 +48,6 @@ struct dentry *lkup_one(const char *name, struct dentry *parent, int len,
 	struct qstr this;
 	unsigned int c;
 	struct nameidata tmp_nd;
-
-	LKTRTrace("%.*s/%.*s, lkup{%p, %d}\n",
-		  DLNPair(parent), len, name, lkup->nfsmnt, lkup->dlgt);
-
-	if (!lkup->nfsmnt) {
-		// todo: optimize
-		if (!lkup->dlgt)
-			return lookup_one_len(name, parent, len);
-		else {
-			/* lookup by kthread keeping privilege */
-			struct lookup_one_len_args args = {
-				.errp	= &dentry,
-				.name	= name,
-				.parent	= parent,
-				.len	= len
-			};
-			wkq_wait(call_lookup_one_len, &args, /*dlgt*/1);
-			return dentry;
-		}
-	}
 
 	dentry = ERR_PTR(-EACCES);
 	this.name = name;
@@ -100,6 +68,9 @@ struct dentry *lkup_one(const char *name, struct dentry *parent, int len,
 	memset(&tmp_nd, 0, sizeof(tmp_nd));
 	tmp_nd.dentry = dget(parent);
 	tmp_nd.mnt = mntget(lkup->nfsmnt);
+#ifndef CONFIG_AUFS_DLGT
+	dentry = __lookup_hash(&this, parent, &tmp_nd);
+#else
 	if (!lkup->dlgt)
 		dentry = __lookup_hash(&this, parent, &tmp_nd);
 	else {
@@ -111,9 +82,65 @@ struct dentry *lkup_one(const char *name, struct dentry *parent, int len,
 		};
 		wkq_wait(call_lookup_hash, &args, /*dlgt*/1);
 	}
+#endif
 	path_release(&tmp_nd);
 
  out:
+	TraceErrPtr(dentry);
+	return dentry;
+}
+#elif defined(CONFIG_AUFS_DLGT)
+static struct dentry *lkup_hash(const char *name, struct dentry *parent,
+				int len, struct lkup_args *lkup)
+{
+	return ERR_PTR(-ENOSYS);
+}
+#endif
+
+#ifdef CONFIG_AUFS_DLGT
+struct lookup_one_len_args {
+	struct dentry **errp;
+	const char *name;
+	struct dentry *parent;
+	int len;
+};
+
+static void call_lookup_one_len(void *args)
+{
+	struct lookup_one_len_args *a = args;
+	*a->errp = lookup_one_len(a->name, a->parent, a->len);
+}
+#endif /* CONFIG_AUFS_DLGT */
+
+#if defined(CONFIG_AUFS_LHASH_PATCH) || defined(CONFIG_AUFS_DLGT)
+/* cf. lookup_one_len() in linux/fs/namei.c */
+struct dentry *lkup_one(const char *name, struct dentry *parent, int len,
+			struct lkup_args *lkup)
+{
+	struct dentry *dentry;
+
+	LKTRTrace("%.*s/%.*s, lkup{%p, %d}\n",
+		  DLNPair(parent), len, name, lkup->nfsmnt, lkup->dlgt);
+
+	if (!lkup->nfsmnt) {
+#ifndef CONFIG_AUFS_DLGT
+		dentry = lookup_one_len(name, parent, len);
+#else
+		if (!lkup->dlgt)
+			dentry = lookup_one_len(name, parent, len);
+		else {
+			struct lookup_one_len_args args = {
+				.errp	= &dentry,
+				.name	= name,
+				.parent	= parent,
+				.len	= len
+			};
+			wkq_wait(call_lookup_one_len, &args, /*dlgt*/1);
+		}
+#endif
+	} else
+		dentry = lkup_hash(name, parent, len, lkup);
+
 	TraceErrPtr(dentry);
 	return dentry;
 }
@@ -158,8 +185,8 @@ static struct dentry *do_lookup(struct dentry *hidden_parent,
 
 	wh_found = 0;
 	sb = dentry->d_sb;
-	wh_able = (sbr_perm(sb, bindex) & (MAY_WRITE | AUFS_MAY_WH));
-	lkup.nfsmnt = mnt_nfs(sb, bindex);
+	wh_able = sbr_is_whable(sb, bindex);
+	lkup.nfsmnt = au_nfsmnt(sb, bindex);
 	name = &dentry->d_name;
 	if (unlikely(wh_able)) {
 #if 0 //def CONFIG_AUFS_AS_BRANCH
@@ -267,7 +294,7 @@ int lkup_dentry(struct dentry *dentry, aufs_bindex_t bstart, mode_t type)
 		struct inode *hidden_inode;
 		struct inode *hidden_dir;
 
-		hidden_dentry = h_dptr_i(dentry, bindex);
+		hidden_dentry = au_h_dptr_i(dentry, bindex);
 		if (hidden_dentry) {
 			if (hidden_dentry->d_inode)
 				npositive++;
@@ -275,7 +302,7 @@ int lkup_dentry(struct dentry *dentry, aufs_bindex_t bstart, mode_t type)
 				break;
 			continue;
 		}
-		hidden_parent = h_dptr_i(parent, bindex);
+		hidden_parent = au_h_dptr_i(parent, bindex);
 		if (!hidden_parent)
 			continue;
 		hidden_dir = hidden_parent->d_inode;
@@ -342,6 +369,7 @@ struct dentry *sio_lkup_one(const char *name, struct dentry *parent, int len,
 			.len	= len,
 			.lkup	= lkup
 		};
+
 		lkup->dlgt = 0;
 		wkq_wait(call_lkup_one, &args, /*dlgt*/0);
 		lkup->dlgt = dlgt;
@@ -365,13 +393,13 @@ int lkup_neg(struct dentry *dentry, aufs_bindex_t bindex)
 	parent = dentry->d_parent;
 	DEBUG_ON(!parent || !parent->d_inode
 		 || !S_ISDIR(parent->d_inode->i_mode));
-	hidden_parent = h_dptr_i(parent, bindex);
+	hidden_parent = au_h_dptr_i(parent, bindex);
 	DEBUG_ON(!hidden_parent);
 	hidden_dir = hidden_parent->d_inode;
 	DEBUG_ON(!hidden_dir || !S_ISDIR(hidden_dir->i_mode));
 	IMustLock(hidden_dir);
 
-	lkup.nfsmnt = mnt_nfs(dentry->d_sb, bindex);
+	lkup.nfsmnt = au_nfsmnt(dentry->d_sb, bindex);
 	lkup.dlgt = need_dlgt(dentry->d_sb);
 	hidden_dentry = sio_lkup_one(dentry->d_name.name, hidden_parent,
 				     dentry->d_name.len, &lkup);
@@ -418,9 +446,9 @@ int au_refresh_hdentry(struct dentry *dentry, mode_t type)
 	sb = dentry->d_sb;
 	DEBUG_ON(IS_ROOT(dentry));
 	parent = dentry->d_parent; // dget_parent()
-	pgen = digen(parent);
+	pgen = au_digen(parent);
 	sgen = au_sigen(sb);
-	dgen = digen(dentry);
+	dgen = au_digen(dentry);
 	DEBUG_ON(pgen != sgen
 		 || AufsGenOlder(sgen, dgen)
 		 || AufsGenOlder(pgen, dgen));
@@ -428,13 +456,12 @@ int au_refresh_hdentry(struct dentry *dentry, mode_t type)
 	npositive = -ENOMEM;
 	new_sz = sizeof(*dinfo->di_hdentry) * (sbend(sb) + 1);
 	dinfo = dtodi(dentry);
-	p = kzrealloc(dinfo->di_hdentry, sizeof(*p) * (dinfo->di_bend + 1),
-		      new_sz);
+	p = au_kzrealloc(dinfo->di_hdentry, sizeof(*p) * (dinfo->di_bend + 1),
+			 new_sz);
 	//p = NULL;
 	if (unlikely(!p))
 		goto out;
 	dinfo->di_hdentry = p;
-	//smp_mb();
 
 	bend = dinfo->di_bend;
 	bwh = dinfo->di_bwh;
@@ -449,7 +476,7 @@ int au_refresh_hdentry(struct dentry *dentry, mode_t type)
 		if (!hd)
 			continue;
 		DEBUG_ON(!hd->d_inode);
-		if (hd->d_parent == h_dptr_i(parent, bindex)) // dget_parent()
+		if (hd->d_parent == au_h_dptr_i(parent, bindex)) // dget_parent()
 			continue;
 
 		new_bindex = au_find_dbindex(parent, hd->d_parent); // dget_parent()
@@ -474,8 +501,14 @@ int au_refresh_hdentry(struct dentry *dentry, mode_t type)
 		}
 	}
 
-	dinfo->di_bwh = bwh;
-	dinfo->di_bdiropq = bdiropq;
+	// test here
+	dinfo->di_bwh = -1;
+	if (unlikely(bwh != -1 && bwh <= sbend(sb) && sbr_is_whable(sb, bwh)))
+		dinfo->di_bwh = bwh;
+	dinfo->di_bdiropq = -1;
+	if (unlikely(bdiropq != -1 && bdiropq <= sbend(sb)
+		     && sbr_is_whable(sb, bdiropq)))
+		dinfo->di_bdiropq = bdiropq;
 	parent_bend = dbend(parent);
 	p = dinfo->di_hdentry;
 	for (bindex = 0; bindex <= parent_bend; bindex++, p++)
@@ -489,7 +522,6 @@ int au_refresh_hdentry(struct dentry *dentry, mode_t type)
 			dinfo->di_bend = bindex;
 			break;
 		}
-	//smp_mb();
 
 	npositive = 0;
 	parent_bstart = dbstart(parent);
@@ -542,11 +574,11 @@ static int hidden_d_revalidate(struct dentry *dentry, struct nameidata *nd)
 	 *	IN_DELETE for NFS dentry
 	 * Let's do REVAL test too.
 	 */
-	udba = IS_MS(sb, (MS_UDBA_REVAL | MS_UDBA_INOTIFY));
+	udba = au_flag_test(sb, (AuFlag_UDBA_REVAL | AuFlag_UDBA_INOTIFY));
 	if (udba && inode) {
 		mode = inode->i_mode & S_IFMT;
 		plus = inode->i_nlink > 0;
-		first = h_iptr(inode);
+		first = au_h_iptr(inode);
 	}
 
 	btail = bstart = dbstart(dentry);
@@ -563,7 +595,7 @@ static int hidden_d_revalidate(struct dentry *dentry, struct nameidata *nd)
 #endif
 	}
 	for (bindex = bstart; bindex <= btail; bindex++) {
-		hidden_dentry = h_dptr_i(dentry, bindex);
+		hidden_dentry = au_h_dptr_i(dentry, bindex);
 		if (unlikely(!hidden_dentry))
 			continue;
 
@@ -626,17 +658,17 @@ static int simple_reval_dpath(struct dentry *dentry, int sgen)
 	DiMustWriteLock(dentry);
 	DEBUG_ON(!dentry->d_inode);
 
-	if (!AufsGenOlder(digen(dentry), sgen))
+	if (!AufsGenOlder(au_digen(dentry), sgen))
 		return 0;
 
 	parent = dget_parent(dentry);
 	di_read_lock_parent(parent, AUFS_I_RLOCK);
-	DEBUG_ON(digen(parent) != sgen);
+	DEBUG_ON(au_digen(parent) != sgen);
 #ifdef CONFIG_AUFS_DEBUG
 	{
 		struct dentry *d = parent;
 		while (!IS_ROOT(d)) {
-			DEBUG_ON(digen(d) != sgen);
+			DEBUG_ON(au_digen(d) != sgen);
 			d = d->d_parent;
 		}
 	}
@@ -667,11 +699,11 @@ int au_reval_dpath(struct dentry *dentry, int sgen)
 	/* slow loop, keep it simple and stupid */
 	/* cf: cpup_dirs() */
 	err = 0;
-	while (digen(dentry) != sgen) {
+	while (au_digen(dentry) != sgen) {
 		d = dentry;
 		while (1) {
 			parent = d->d_parent; // dget_parent()
-			if (digen(parent) == sgen)
+			if (au_digen(parent) == sgen)
 				break;
 			d = parent;
 		}
@@ -680,7 +712,7 @@ int au_reval_dpath(struct dentry *dentry, int sgen)
 			di_write_lock_child(d);
 
 		/* someone might update our dentry while we were sleeping */
-		if (AufsGenOlder(digen(d), sgen)) {
+		if (AufsGenOlder(au_digen(d), sgen)) {
 			di_read_lock_parent(parent, AUFS_I_RLOCK);
 			/* returns a number of positive dentries */
 			err = au_refresh_hdentry(d,
@@ -719,8 +751,8 @@ static int aufs_d_revalidate(struct dentry *dentry, struct nameidata *nd)
 	DEBUG_ON(!dentry->d_fsdata);
 
 	err = -EINVAL;
-	DEBUG_ON(direval_test(dentry) < 0);
-	if (unlikely(direval_test(dentry))) {
+	DEBUG_ON(au_direval_test(dentry) < 0);
+	if (unlikely(au_direval_test(dentry))) {
 #ifdef ForceInotify
 		Dbg("UDBA %.*s\n", DLNPair(dentry));
 #endif
@@ -732,7 +764,7 @@ static int aufs_d_revalidate(struct dentry *dentry, struct nameidata *nd)
 	sb = dentry->d_sb;
 	si_read_lock(sb);
 	sgen = au_sigen(dentry->d_sb);
-	if (digen(dentry) == sgen)
+	if (au_digen(dentry) == sgen)
 		di_read_lock_child(dentry, AUFS_I_RLOCK);
 	else {
 		DEBUG_ON(!dentry->d_inode);
@@ -792,8 +824,7 @@ static void aufs_d_release(struct dentry *dentry)
 			p++;
 		}
 	}
-	DEBUG_ON(direval_test(dentry) < 0);
-	rw_destroy(&dinfo->di_rwsem);
+	DEBUG_ON(au_direval_test(dentry) < 0);
 	kfree(dinfo->di_hdentry);
 	cache_free_dinfo(dinfo);
 }
@@ -809,7 +840,8 @@ static void aufs_d_iput(struct dentry *dentry, struct inode *inode)
 	sb = dentry->d_sb;
 #if 0
 	si_read_lock(sb);
-	if (unlikely(IS_MS(sb, MS_PLINK) && au_is_plinked(sb, inode))) {
+	if (unlikely(au_flag_test(sb, AuFlag_PLINK)
+		     && au_is_plinked(sb, inode))) {
 		ii_write_lock(inode);
 		au_update_brange(inode, 1);
 		ii_write_unlock(inode);

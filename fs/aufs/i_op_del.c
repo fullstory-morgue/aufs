@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: i_op_del.c,v 1.27 2007/03/19 04:32:35 sfjro Exp $ */
+/* $Id: i_op_del.c,v 1.28 2007/03/27 12:51:43 sfjro Exp $ */
 
 #include "aufs.h"
 
@@ -39,7 +39,7 @@ int wr_dir_need_wh(struct dentry *dentry, int isdir, aufs_bindex_t *bcpup,
 
 	bstart = dbstart(dentry);
 	LKTRTrace("bcpup %d, bstart %d\n", *bcpup, bstart);
-	hidden_dentry = h_dptr(dentry);
+	hidden_dentry = au_h_dptr(dentry);
 	if (*bcpup < 0) {
 		*bcpup = bstart;
 		if (test_ro(sb, bstart, dentry->d_inode)) {
@@ -79,7 +79,7 @@ int wr_dir_need_wh(struct dentry *dentry, int isdir, aufs_bindex_t *bcpup,
 			set_h_dptr(dentry, new_bend, NULL);
 			set_dbend(dentry, old_bend);
 #if 0
-		} else if (!h_dptr_i(dentry, new_bend)->d_inode) {
+		} else if (!au_h_dptr_i(dentry, new_bend)->d_inode) {
 			LKTRTrace("negative\n");
 			set_h_dptr(dentry, new_bend, NULL);
 			set_dbend(dentry, old_bend);
@@ -95,9 +95,9 @@ int wr_dir_need_wh(struct dentry *dentry, int isdir, aufs_bindex_t *bcpup,
 	return err;
 }
 
-static struct dentry *lock_hdir_create_wh(struct dentry *dentry, int isdir,
-					  aufs_bindex_t *bcpup,
-					  struct dtime *dt)
+static struct dentry *
+lock_hdir_create_wh(struct dentry *dentry, int isdir, aufs_bindex_t *bcpup,
+		    struct dtime *dt)
 {
 	struct dentry *wh_dentry;
 	int err, need_wh;
@@ -115,14 +115,14 @@ static struct dentry *lock_hdir_create_wh(struct dentry *dentry, int isdir,
 
 	parent = dentry->d_parent;
 	dir = parent->d_inode;
-	hidden_parent = h_dptr_i(parent, *bcpup);
+	hidden_parent = au_h_dptr_i(parent, *bcpup);
 	h_dir = hidden_parent->d_inode;
 	hdir_lock(h_dir, dir, *bcpup);
 	dtime_store(dt, parent, hidden_parent);
 	if (!need_wh)
 		return NULL; /* success, no need to create whiteout */
 
-	lkup.nfsmnt = mnt_nfs(dentry->d_sb, *bcpup);
+	lkup.nfsmnt = au_nfsmnt(dentry->d_sb, *bcpup);
 	lkup.dlgt = need_dlgt(dentry->d_sb);
 	wh_dentry = simple_create_wh(dentry, *bcpup, hidden_parent, &lkup);
 	//wh_dentry = ERR_PTR(-1);
@@ -148,12 +148,12 @@ static int renwh_and_rmdir(struct dentry *dentry, aufs_bindex_t bindex,
 	err = rename_whtmp(dentry, bindex);
 	//err = -1;
 	if (unlikely(err)) {
-		direval_inc(dentry->d_parent);
+		au_direval_inc(dentry->d_parent);
 		return err;
 	}
 
-	hidden_dentry = h_dptr_i(dentry, bindex);
-	if (!SB_NFS(hidden_dentry->d_sb)) {
+	hidden_dentry = au_h_dptr_i(dentry, bindex);
+	if (!au_is_nfs(hidden_dentry->d_sb)) {
 		const int dirwh = stosi(dentry->d_sb)->si_dirwh;
 		rmdir_later = (dirwh <= 1);
 		if (!rmdir_later)
@@ -237,7 +237,7 @@ int aufs_unlink(struct inode *dir, struct dentry *dentry)
 		goto out;
 
 	dlgt = need_dlgt(dir->i_sb);
-	hidden_dentry = h_dptr(dentry);
+	hidden_dentry = au_h_dptr(dentry);
 	dget(hidden_dentry);
 	hidden_parent = hidden_dentry->d_parent;
 	hidden_dir = hidden_parent->d_inode;
@@ -248,7 +248,7 @@ int aufs_unlink(struct inode *dir, struct dentry *dentry)
 	} else {
 		DEBUG_ON(!wh_dentry);
 		hidden_parent = wh_dentry->d_parent;
-		DEBUG_ON(hidden_parent != h_dptr_i(parent, bindex));
+		DEBUG_ON(hidden_parent != au_h_dptr_i(parent, bindex));
 		hidden_dir = hidden_parent->d_inode;
 		IMustLock(hidden_dir);
 		err = 0;
@@ -323,7 +323,7 @@ int aufs_rmdir(struct inode *dir, struct dentry *dentry)
 	if (IS_ERR(wh_dentry))
 		goto out;
 
-	hidden_dentry = h_dptr(dentry);
+	hidden_dentry = au_h_dptr(dentry);
 	dget(hidden_dentry);
 	hidden_parent = hidden_dentry->d_parent;
 	hidden_dir = hidden_parent->d_inode;
@@ -339,7 +339,7 @@ int aufs_rmdir(struct inode *dir, struct dentry *dentry)
 	} else {
 		DEBUG_ON(!wh_dentry);
 		hidden_parent = wh_dentry->d_parent;
-		DEBUG_ON(hidden_parent != h_dptr_i(parent, bindex));
+		DEBUG_ON(hidden_parent != au_h_dptr_i(parent, bindex));
 		hidden_dir = hidden_parent->d_inode;
 		IMustLock(hidden_dir);
 		err = 0;

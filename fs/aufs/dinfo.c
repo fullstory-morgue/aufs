@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: dinfo.c,v 1.21 2007/03/19 04:31:46 sfjro Exp $ */
+/* $Id: dinfo.c,v 1.22 2007/03/27 12:51:11 sfjro Exp $ */
 
 #include "aufs.h"
 
@@ -41,7 +41,7 @@ int au_alloc_dinfo(struct dentry *dentry)
 		//if (LktrCond)
 		//{kfree(dinfo->di_hdentry); dinfo->di_hdentry = NULL;}
 		if (dinfo->di_hdentry) {
-			rw_init_wlock(&dinfo->di_rwsem, AUFS_LSC_DINFO_PARENT);
+			rw_init_wlock_nested(&dinfo->di_rwsem, AuLsc_DI_PARENT);
 			dinfo->di_bstart = dinfo->di_bend = -1;
 			dinfo->di_bwh = dinfo->di_bdiropq = -1;
 			atomic_set(&dinfo->di_generation, au_sigen(sb));
@@ -77,22 +77,22 @@ struct aufs_dinfo *dtodi(struct dentry *dentry)
 static void do_ii_write_lock(struct inode *inode, unsigned int lsc)
 {
 	switch (lsc) {
-	case AUFS_LSC_DINFO_CHILD:
+	case AuLsc_DI_CHILD:
 		ii_write_lock_child(inode);
 		break;
-	case AUFS_LSC_DINFO_CHILD2:
+	case AuLsc_DI_CHILD2:
 		ii_write_lock_child2(inode);
 		break;
-	case AUFS_LSC_DINFO_CHILD3:
+	case AuLsc_DI_CHILD3:
 		ii_write_lock_child3(inode);
 		break;
-	case AUFS_LSC_DINFO_PARENT:
+	case AuLsc_DI_PARENT:
 		ii_write_lock_parent(inode);
 		break;
-	case AUFS_LSC_DINFO_PARENT2:
+	case AuLsc_DI_PARENT2:
 		ii_write_lock_parent2(inode);
 		break;
-	case AUFS_LSC_DINFO_PARENT3:
+	case AuLsc_DI_PARENT3:
 		ii_write_lock_parent3(inode);
 		break;
 	default:
@@ -103,22 +103,22 @@ static void do_ii_write_lock(struct inode *inode, unsigned int lsc)
 static void do_ii_read_lock(struct inode *inode, unsigned int lsc)
 {
 	switch (lsc) {
-	case AUFS_LSC_DINFO_CHILD:
+	case AuLsc_DI_CHILD:
 		ii_read_lock_child(inode);
 		break;
-	case AUFS_LSC_DINFO_CHILD2:
+	case AuLsc_DI_CHILD2:
 		ii_read_lock_child2(inode);
 		break;
-	case AUFS_LSC_DINFO_CHILD3:
+	case AuLsc_DI_CHILD3:
 		ii_read_lock_child3(inode);
 		break;
-	case AUFS_LSC_DINFO_PARENT:
+	case AuLsc_DI_PARENT:
 		ii_read_lock_parent(inode);
 		break;
-	case AUFS_LSC_DINFO_PARENT2:
+	case AuLsc_DI_PARENT2:
 		ii_read_lock_parent2(inode);
 		break;
-	case AUFS_LSC_DINFO_PARENT3:
+	case AuLsc_DI_PARENT3:
 		ii_read_lock_parent3(inode);
 		break;
 	default:
@@ -129,7 +129,8 @@ static void do_ii_read_lock(struct inode *inode, unsigned int lsc)
 void di_read_lock(struct dentry *d, int flags, unsigned int lsc)
 {
 	SiMustAnyLock(d->d_sb);
-	rw_read_lock(&dtodi(d)->di_rwsem, lsc);
+	// todo: always nested?
+	rw_read_lock_nested(&dtodi(d)->di_rwsem, lsc);
 	if (d->d_inode) {
 		if (flags & AUFS_I_WLOCK)
 			do_ii_write_lock(d->d_inode, lsc);
@@ -161,7 +162,8 @@ void di_downgrade_lock(struct dentry *d, int flags)
 void di_write_lock(struct dentry *d, unsigned int lsc)
 {
 	SiMustAnyLock(d->d_sb);
-	rw_write_lock(&dtodi(d)->di_rwsem, lsc);
+	// todo: always nested?
+	rw_write_lock_nested(&dtodi(d)->di_rwsem, lsc);
 	if (d->d_inode)
 		do_ii_write_lock(d->d_inode, lsc);
 }
@@ -254,7 +256,7 @@ aufs_bindex_t dbdiropq(struct dentry *dentry)
 	return dtodi(dentry)->di_bdiropq;
 }
 
-struct dentry *h_dptr_i(struct dentry *dentry, aufs_bindex_t bindex)
+struct dentry *au_h_dptr_i(struct dentry *dentry, aufs_bindex_t bindex)
 {
 	struct dentry *d;
 
@@ -268,9 +270,9 @@ struct dentry *h_dptr_i(struct dentry *dentry, aufs_bindex_t bindex)
 	return d;
 }
 
-struct dentry *h_dptr(struct dentry *dentry)
+struct dentry *au_h_dptr(struct dentry *dentry)
 {
-	return h_dptr_i(dentry, dbstart(dentry));
+	return au_h_dptr_i(dentry, dbstart(dentry));
 }
 
 aufs_bindex_t dbtail(struct dentry *dentry)
@@ -327,7 +329,6 @@ void set_dbstart(struct dentry *dentry, aufs_bindex_t bindex)
 	DEBUG_ON(sbend(dentry->d_sb) < bindex);
 	/* */
 	dtodi(dentry)->di_bstart = bindex;
-	//smp_mb();
 }
 
 void set_dbend(struct dentry *dentry, aufs_bindex_t bindex)
@@ -336,7 +337,6 @@ void set_dbend(struct dentry *dentry, aufs_bindex_t bindex)
 	DEBUG_ON(sbend(dentry->d_sb) < bindex
 		 || bindex < dbstart(dentry));
 	dtodi(dentry)->di_bend = bindex;
-	//smp_mb();
 }
 
 void set_dbwh(struct dentry *dentry, aufs_bindex_t bindex)
@@ -345,7 +345,6 @@ void set_dbwh(struct dentry *dentry, aufs_bindex_t bindex)
 	DEBUG_ON(sbend(dentry->d_sb) < bindex);
 	/* dbwh can be outside of bstart - bend range */
 	dtodi(dentry)->di_bwh = bindex;
-	//smp_mb();
 }
 
 void set_dbdiropq(struct dentry *dentry, aufs_bindex_t bindex)
@@ -358,7 +357,6 @@ void set_dbdiropq(struct dentry *dentry, aufs_bindex_t bindex)
 		     && dentry->d_inode->i_mode
 		     && !S_ISDIR(dentry->d_inode->i_mode)));
 	dtodi(dentry)->di_bdiropq = bindex;
-	//smp_mb();
 }
 
 void hdput(struct aufs_hdentry *hd)
@@ -379,7 +377,6 @@ void set_h_dptr(struct dentry *dentry, aufs_bindex_t bindex,
 	if (hd->hd_dentry)
 		hdput(hd);
 	hd->hd_dentry = h_dentry;
-	//smp_mb();
 }
 
 /* ---------------------------------------------------------------------- */
@@ -398,7 +395,7 @@ void au_update_dbstart(struct dentry *dentry)
 
 	DiMustWriteLock(dentry);
 	for (bindex = bstart; bindex <= bend; bindex++) {
-		hidden_dentry = h_dptr_i(dentry, bindex);
+		hidden_dentry = au_h_dptr_i(dentry, bindex);
 		if (!hidden_dentry)
 			continue;
 		if (hidden_dentry->d_inode) {
@@ -417,7 +414,7 @@ int au_find_dbindex(struct dentry *dentry, struct dentry *hidden_dentry)
 
 	bend = dbend(dentry);
 	for (bindex = dbstart(dentry); bindex <= bend; bindex++)
-		if (h_dptr_i(dentry, bindex) == hidden_dentry)
+		if (au_h_dptr_i(dentry, bindex) == hidden_dentry)
 			return bindex;
 	return -1;
 }

@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: f_op.c,v 1.20 2007/03/19 04:31:31 sfjro Exp $ */
+/* $Id: f_op.c,v 1.21 2007/03/27 12:49:00 sfjro Exp $ */
 
 #include <linux/fsnotify.h>
 #include <linux/pagemap.h>
@@ -50,7 +50,7 @@ int aufs_flush(struct file *file)
 	bend = fbend(file);
 	for (bindex = fbstart(file); !err && bindex <= bend; bindex++) {
 		struct file *hidden_file;
-		hidden_file = h_fptr_i(file, bindex);
+		hidden_file = au_h_fptr_i(file, bindex);
 		if (hidden_file && hidden_file->f_op
 		    && hidden_file->f_op->flush)
 			err = hidden_file->f_op->flush(FlushArgs);
@@ -87,7 +87,7 @@ static int do_open_nondir(struct file *file, int flags)
 	finfo->fi_h_vm_ops = NULL;
 	sb = dentry->d_sb;
 	bindex = dbstart(dentry);
-	DEBUG_ON(!h_dptr(dentry)->d_inode);
+	DEBUG_ON(!au_h_dptr(dentry)->d_inode);
 	/* O_TRUNC is processed already */
 	BUG_ON(test_ro(sb, bindex, inode) && (flags & O_TRUNC));
 
@@ -142,10 +142,9 @@ static ssize_t aufs_read(struct file *file, char __user *buf, size_t count,
 
 	/* support LSM and notify */
 	dlgt = need_dlgt(sb);
-	hidden_file = h_fptr(file);
+	hidden_file = au_h_fptr(file);
 	h_inode = hidden_file->f_dentry->d_inode;
-	// todo: stop inotify? really?
-	if (1 || !IS_MS(sb, MS_UDBA_INOTIFY))
+	if (!au_flag_test(sb, AuFlag_UDBA_INOTIFY))
 		err = vfsub_read_u(hidden_file, buf, count, ppos, dlgt);
 	else {
 		struct inode *dir = dentry->d_parent->d_inode,
@@ -196,12 +195,11 @@ static ssize_t aufs_write(struct file *file, const char __user *__buf,
 
 	/* support LSM and notify */
 	dlgt = need_dlgt(sb);
-	hidden_file = h_fptr(file);
+	hidden_file = au_h_fptr(file);
 	h_inode = hidden_file->f_dentry->d_inode;
-	// todo: stop inotify? really?
-	if (!IS_MS(sb, MS_UDBA_INOTIFY)) {
+	if (!au_flag_test(sb, AuFlag_UDBA_INOTIFY))
 		err = vfsub_write_u(hidden_file, buf, count, ppos, dlgt);
-	} else {
+	else {
 		struct inode *dir = dentry->d_parent->d_inode,
 			*h_dir = hidden_file->f_dentry->d_parent->d_inode;
 		aufs_bindex_t bstart = fbstart(file);
@@ -300,7 +298,7 @@ static struct file *safe_file(struct vm_area_struct *vma)
 	struct file *file;
 
 	file = vma->vm_file;
-	if (file->private_data && SB_AUFS(file->f_dentry->d_sb))
+	if (file->private_data && au_is_aufs(file->f_dentry->d_sb))
 		return file;
 	return NULL;
 }
@@ -325,7 +323,7 @@ static struct page *aufs_nopage(struct vm_area_struct *vma, unsigned long addr,
 	TraceEnter();
 	DEBUG_ON(!vma || !vma->vm_file);
 	wait_event(wq, (file = safe_file(vma)));
-	DEBUG_ON(!SB_AUFS(file->f_dentry->d_sb));
+	DEBUG_ON(!au_is_aufs(file->f_dentry->d_sb));
 	dentry = file->f_dentry;
 	LKTRTrace("%.*s, addr %lx\n", DLNPair(dentry), addr);
 	inode = dentry->d_inode;
@@ -334,7 +332,7 @@ static struct page *aufs_nopage(struct vm_area_struct *vma, unsigned long addr,
 	// do not revalidate, nor lock
 	finfo = ftofi(file);
 	hidden_file = finfo->fi_hfile[0 + finfo->fi_bstart].hf_file;
-	DEBUG_ON(!hidden_file || !is_mmapped(file));
+	DEBUG_ON(!hidden_file || !au_is_mmapped(file));
 	vma->vm_file = hidden_file;
 	//smp_mb();
 	page = finfo->fi_h_vm_ops->nopage(vma, addr, type);
@@ -381,7 +379,7 @@ static int aufs_mmap(struct file *file, struct vm_area_struct *vma)
 	int err, wlock, mmapped;
 	struct dentry *dentry;
 	struct super_block *sb;
-	struct file *hidden_file;
+	struct file *h_file;
 	struct vm_operations_struct *vm_ops;
 
 	dentry = file->f_dentry;
@@ -390,7 +388,7 @@ static int aufs_mmap(struct file *file, struct vm_area_struct *vma)
 	DEBUG_ON(!S_ISREG(dentry->d_inode->i_mode));
 	DEBUG_ON(down_write_trylock(&vma->vm_mm->mmap_sem));
 
-	mmapped = is_mmapped(file);
+	mmapped = au_is_mmapped(file);
 	wlock = 0;
 	if (file->f_mode & FMODE_WRITE) {
 		wlock = VM_SHARED | VM_WRITE;
@@ -412,10 +410,13 @@ static int aufs_mmap(struct file *file, struct vm_area_struct *vma)
 			goto out_unlock;
 	}
 
-	hidden_file = h_fptr(file);
+	h_file = au_h_fptr(file);
 	vm_ops = ftofi(file)->fi_h_vm_ops;
 	if (unlikely(!mmapped)) {
-		err = hidden_file->f_op->mmap(hidden_file, vma);
+		// nfs uses some locks
+		lockdep_off();
+		err = h_file->f_op->mmap(h_file, vma);
+		lockdep_on();
 		if (unlikely(err))
 			goto out_unlock;
 		vm_ops = vma->vm_ops;
@@ -424,7 +425,7 @@ static int aufs_mmap(struct file *file, struct vm_area_struct *vma)
 				vma->vm_end - vma->vm_start);
 		if (unlikely(err)) {
 			IOErr("failed internal unmapping %.*s, %d\n",
-			      DLNPair(hidden_file->f_dentry), err);
+			      DLNPair(h_file->f_dentry), err);
 			err = -EIO;
 			goto out_unlock;
 		}
@@ -433,9 +434,8 @@ static int aufs_mmap(struct file *file, struct vm_area_struct *vma)
 
 	err = generic_file_mmap(file, vma);
 	if (!err) {
-		file_accessed(hidden_file);
-		dentry->d_inode->i_atime
-			= hidden_file->f_dentry->d_inode->i_atime;
+		file_accessed(h_file);
+		dentry->d_inode->i_atime = h_file->f_dentry->d_inode->i_atime;
 		vma->vm_ops = &aufs_vm_ops;
 		if (unlikely(!mmapped))
 			ftofi(file)->fi_h_vm_ops = vm_ops;
@@ -457,7 +457,7 @@ static ssize_t aufs_sendfile(struct file *file, loff_t *ppos,
 			     size_t count, read_actor_t actor, void *target)
 {
 	ssize_t err;
-	struct file *hidden_file;
+	struct file *h_file;
 	const char c = current->comm[4];
 	/* true if a kernel thread named 'loop[0-9].*' accesses a file */
 	const int loopback = (current->mm == NULL
@@ -478,16 +478,18 @@ static ssize_t aufs_sendfile(struct file *file, loff_t *ppos,
 		goto out;
 
 	err = -EINVAL;
-	hidden_file = h_fptr(file);
-	if (hidden_file->f_op && hidden_file->f_op->sendfile) {
+	h_file = au_h_fptr(file);
+	if (h_file->f_op && h_file->f_op->sendfile) {
 		if (/* unlikely */(loopback)) {
-			file->f_mapping = hidden_file->f_mapping;
-			smp_mb();
+			file->f_mapping = h_file->f_mapping;
+			smp_mb(); //??
 		}
-		err = hidden_file->f_op->sendfile
-			(hidden_file, ppos, count, actor, target);
-		dentry->d_inode->i_atime
-			= hidden_file->f_dentry->d_inode->i_atime;
+		// nfs uses some locks
+		lockdep_off();
+		err = h_file->f_op->sendfile
+			(h_file, ppos, count, actor, target);
+		lockdep_on();
+		dentry->d_inode->i_atime = h_file->f_dentry->d_inode->i_atime;
 	}
 	fi_read_unlock(file);
 
@@ -526,7 +528,7 @@ static unsigned int aufs_poll(struct file *file, poll_table *wait)
 
 	/* it is not an error of hidden_file has no operation */
 	mask = DEFAULT_POLLMASK;
-	hidden_file = h_fptr(file);
+	hidden_file = au_h_fptr(file);
 	if (hidden_file->f_op && hidden_file->f_op->poll)
 		mask = hidden_file->f_op->poll(hidden_file, wait);
 	fi_read_unlock(file);
@@ -556,7 +558,7 @@ static int aufs_fsync_nondir(struct file *file, struct dentry *dentry,
 
 	sb = dentry->d_sb;
 	si_read_lock(sb);
-	err = 0; //-EBADF;
+	err = 0; //-EBADF; // posix?
 	if (unlikely(!(file->f_mode & FMODE_WRITE)))
 		goto out;
 	err = au_reval_and_lock_finfo(file, au_reopen_nondir, /*wlock*/1,
@@ -570,7 +572,7 @@ static int aufs_fsync_nondir(struct file *file, struct dentry *dentry,
 		goto out_unlock;
 
 	err = -EINVAL;
-	hidden_file = h_fptr(file);
+	hidden_file = au_h_fptr(file);
 	if (hidden_file->f_op && hidden_file->f_op->fsync) {
 		// todo: apparmor thread?
 		//file->f_mapping->host->i_mutex
@@ -610,7 +612,7 @@ static int aufs_fasync(int fd, struct file *file, int flag)
 	if (unlikely(err))
 		goto out;
 
-	hidden_file = h_fptr(file);
+	hidden_file = au_h_fptr(file);
 	if (hidden_file->f_op && hidden_file->f_op->fasync)
 		err = hidden_file->f_op->fasync(fd, hidden_file, flag);
 	fi_read_unlock(file);

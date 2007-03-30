@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: super.h,v 1.37 2007/03/19 04:32:35 sfjro Exp $ */
+/* $Id: super.h,v 1.38 2007/03/27 12:48:03 sfjro Exp $ */
 
 #ifndef __AUFS_SUPER_H__
 #define __AUFS_SUPER_H__
@@ -44,7 +44,6 @@ struct aufs_sbinfo {
 	 */
 	unsigned int		si_failed_refresh_dirs:1;
 	aufs_bindex_t		si_bend;
-	//unsigned int		si_last_br_id;
 	aufs_bindex_t		si_last_br_id;
 	struct aufs_branch	**si_branch;
 
@@ -86,101 +85,49 @@ struct aufs_sbinfo {
 #endif
 };
 
-#define sbtype(sb)	({(sb)->s_type->name;})
-#define SB_AUFS(sb)	(!strcmp(sbtype(sb), AUFS_FSTYPE))
-#if defined(CONFIG_NFS_FS) || defined(CONFIG_NFS_FS_MODULE)
-#define SB_NFS(sb)	(!strcmp(sbtype(sb), "nfs"))
-#else
-#define SB_NFS(sb)	0
-#endif
-#define SB_REMOTE(sb)	SB_NFS(sb)
+/* Mount flags */
+#define AuFlag_XINO		1
+#define AuFlag_ZXINO		(1 << 1)
+#define AuFlag_PLINK		(1 << 2)
+#define AuFlag_UDBA_NONE	(1 << 3)
+#define AuFlag_UDBA_REVAL	(1 << 4)
+#define AuFlag_UDBA_INOTIFY	(1 << 5)
+#define AuFlag_WARN_PERM	(1 << 6)
+#define AuFlag_COO_NONE		(1 << 7)
+#define AuFlag_COO_LEAF		(1 << 8)
+#define AuFlag_COO_ALL		(1 << 9)
+#define AuFlag_ALWAYS_DIROPQ	(1 << 10)
+#define AuFlag_DLGT		(1 << 11)
 
-static inline struct vfsmount *do_mnt_nfs(struct vfsmount *h_mnt)
-{
-	if (!SB_NFS(h_mnt->mnt_sb))
-		return NULL;
-	return h_mnt;
-}
+#define AuMask_UDBA		(AuFlag_UDBA_NONE | AuFlag_UDBA_REVAL \
+					| AuFlag_UDBA_INOTIFY)
+#define AuMask_COO		(AuFlag_COO_NONE | AuFlag_COO_LEAF \
+					| AuFlag_COO_ALL)
 
-#ifdef CONFIG_AUFS_EXPORT
-extern struct export_operations aufs_export_op;
-#define init_export_op(sb)	({(sb)->s_export_op = &aufs_export_op;})
+#ifdef CONFIG_AUFS_COMPAT
+#define AuDefFlag_DIROPQ	AuFlag_ALWAYS_DIROPQ
 #else
-#define init_export_op(sb)	/* */
-#endif
-
-#if 0 //def CONFIG_AUFS_AS_BRANCH
-static inline void init_lvma(struct aufs_sbinfo *sbinfo)
-{
-	spin_lock_init(&sbinfo->si_lvma_lock);
-	INIT_LIST_HEAD(&sbinfo->si_lvma);
-}
-#else
-#define init_lvma(sbinfo)	/* */
+#define AuDefFlag_DIROPQ	0
 #endif
 
-/* see linux/include/linux/jiffies.h */
-#define AufsGenYounger(a, b)	((b) - (a) < 0)
-#define AufsGenOlder(a, b)	AufsGenYounger(b, a)
+#define AuDefFlags_COMM		(AuFlag_XINO | AuFlag_UDBA_REVAL | AuFlag_WARN_PERM \
+					| AuFlag_COO_NONE | AuDefFlag_DIROPQ)
+#if LINUX_VERSION_CODE != KERNEL_VERSION(2,6,15)
+#define AuDefFlags		(AuDefFlags_COMM | AuFlag_PLINK)
+#else
+#define AuDefFlags		AuDefFlags_COMM
+#endif
+
+/* ---------------------------------------------------------------------- */
 
 /* flags for aufs_read_lock()/di_read_lock() */
 #define AUFS_D_WLOCK		1
 #define AUFS_I_RLOCK		2
 #define AUFS_I_WLOCK		4
 
-/* lock superblock. mainly for entry point functions */
-#define si_read_lock(sb) \
-	rw_read_lock(&stosi(sb)->si_rwsem, AUFS_LSC_SBINFO)
-#define si_read_lock_nfsd(sb) \
-	rw_read_lock(&stosi(sb)->si_rwsem, AUFS_LSC_SBINFO_NFS)
-#define si_read_lock_inotify(sb) \
-	rw_read_lock(&stosi(sb)->si_rwsem, AUFS_LSC_SBINFO_HINOTIFY)
-#define si_read_unlock(sb)	rw_read_unlock(&stosi(sb)->si_rwsem)
-#define si_write_lock(sb) \
-	rw_write_lock(&stosi(sb)->si_rwsem, AUFS_LSC_SBINFO)
-#define si_write_unlock(sb)	rw_write_unlock(&stosi(sb)->si_rwsem)
-#define SiMustReadLock(sb)	RwMustReadLock(&stosi(sb)->si_rwsem)
-#define SiMustWriteLock(sb)	RwMustWriteLock(&stosi(sb)->si_rwsem)
-#define SiMustAnyLock(sb)	RwMustAnyLock(&stosi(sb)->si_rwsem)
-
-/* Mount time flags */
-#define MS_XINO			1
-#define MS_ZXINO		(1 << 1)
-#define MS_PLINK		(1 << 2)
-#define MS_UDBA_NONE		(1 << 3)
-#define MS_UDBA_REVAL		(1 << 4)
-#define MS_UDBA_INOTIFY		(1 << 5)
-#define MS_WARN_PERM		(1 << 6)
-#define MS_COO_NONE		(1 << 7)
-#define MS_COO_LEAF		(1 << 8)
-#define MS_COO_ALL		(1 << 9)
-#define MS_ALWAYS_DIROPQ	(1 << 10)
-#define MS_DLGT			(1 << 11)
-#define MS_SET(sb, flg)		({stosi(sb)->si_flags |= flg;})
-#define MS_CLR(sb, flg)		({stosi(sb)->si_flags &= ~(flg);})
-#define IS_MS(sb, flg)		({stosi(sb)->si_flags & flg;})
-
-#ifdef CONFIG_AUFS_COMPAT
-#define MS_DEF_DIROPQ		MS_ALWAYS_DIROPQ
-#else
-#define MS_DEF_DIROPQ		0
-#endif
-
-#define MS_UDBA_MASK		(MS_UDBA_NONE | MS_UDBA_REVAL | MS_UDBA_INOTIFY)
-#define MS_UDBA(sb)		IS_MS(sb, MS_UDBA_MASK)
-#define MS_COO_MASK		(MS_COO_NONE | MS_COO_LEAF | MS_COO_ALL)
-#define MS_COO(sb)		IS_MS(sb, MS_COO_MASK)
-
-#define COMM_DEF		(MS_XINO | MS_UDBA_REVAL | MS_WARN_PERM \
-					| MS_COO_NONE | MS_DEF_DIROPQ)
-#if LINUX_VERSION_CODE != KERNEL_VERSION(2,6,15)
-#define MS_DEF	(COMM_DEF | MS_PLINK)
-#else
-#define MS_DEF	COMM_DEF
-#endif
-
 /* ---------------------------------------------------------------------- */
 
+// super.c
 int au_show_brs(struct seq_file *seq, struct super_block *sb);
 
 //xino.c
@@ -199,11 +146,6 @@ struct file *xino_def(struct super_block *sb);
 
 //sbinfo.c
 struct aufs_sbinfo *stosi(struct super_block *sb);
-#if 0 // debug
-void MS_SET(struct super_block *sb, unsigned int flg);
-void MS_CLR(struct super_block *sb, unsigned int flg);
-unsigned int IS_MS(struct super_block *sb, unsigned int flg);
-#endif
 aufs_bindex_t sbend(struct super_block *sb);
 struct aufs_branch *stobr(struct super_block *sb, aufs_bindex_t bindex);
 int au_sigen(struct super_block *sb);
@@ -220,7 +162,10 @@ void aufs_read_and_write_unlock2(struct dentry *d1, struct dentry *d2);
 #ifdef CONFIG_AUFS_DEBUG
 void au_list_plink(struct super_block *sb);
 #else
-#define au_list_plink(sb)	/* */
+static inline void au_list_plink(struct super_block *sb)
+{
+	/* nothing */
+}
 #endif
 int au_is_plinked(struct super_block *sb, struct inode *inode);
 struct dentry *lkup_plink(struct super_block *sb, aufs_bindex_t bindex,
@@ -231,6 +176,127 @@ void au_put_plink(struct super_block *sb);
 void half_refresh_plink(struct super_block *sb, aufs_bindex_t br_id);
 
 aufs_bindex_t new_br_id(struct super_block *sb);
+
+/* ---------------------------------------------------------------------- */
+
+static inline const char *au_sbtype(struct super_block *sb)
+{
+	return sb->s_type->name;
+}
+
+static inline int au_is_aufs(struct super_block *sb)
+{
+	return !strcmp(au_sbtype(sb), AUFS_FSTYPE);
+}
+
+static inline int au_is_nfs(struct super_block *sb)
+{
+#if defined(CONFIG_NFS_FS) || defined(CONFIG_NFS_FS_MODULE)
+	return !strcmp(au_sbtype(sb), "nfs");
+#else
+	return 0;
+#endif
+}
+
+static inline int au_is_remote(struct super_block *sb)
+{
+	return au_is_nfs(sb);
+}
+
+static inline void init_export_op(struct super_block *sb)
+{
+#ifdef CONFIG_AUFS_EXPORT
+	extern struct export_operations aufs_export_op;
+	sb->s_export_op = &aufs_export_op;
+#else
+	/* nothing */
+#endif
+}
+
+static inline void init_lvma(struct aufs_sbinfo *sbinfo)
+{
+#if 0 //def CONFIG_AUFS_AS_BRANCH
+	spin_lock_init(&sbinfo->si_lvma_lock);
+	INIT_LIST_HEAD(&sbinfo->si_lvma);
+#else
+	/* nothing */
+#endif
+}
+
+/* ---------------------------------------------------------------------- */
+
+static inline void au_flag_set(struct super_block *sb, unsigned int flag)
+{
+	//SiMustWriteLock(sb);
+	stosi(sb)->si_flags |= flag;
+}
+
+static inline void au_flag_clr(struct super_block *sb, unsigned int flag)
+{
+	//SiMustWriteLock(sb);
+	stosi(sb)->si_flags &= ~flag;
+}
+
+static inline
+unsigned int au_flag_test(struct super_block *sb, unsigned int flag)
+{
+	//SiMustAnyLock(sb);
+	return stosi(sb)->si_flags & flag;
+}
+
+static inline unsigned int au_flag_test_udba(struct super_block *sb)
+{
+	return au_flag_test(sb, AuMask_UDBA);
+}
+
+static inline unsigned int au_flag_test_coo(struct super_block *sb)
+{
+	return au_flag_test(sb, AuMask_COO);
+}
+
+/* ---------------------------------------------------------------------- */
+
+/* see linux/include/linux/jiffies.h */
+#define AufsGenYounger(a, b)	((b) - (a) < 0)
+#define AufsGenOlder(a, b)	AufsGenYounger(b, a)
+
+/* ---------------------------------------------------------------------- */
+
+/* lock superblock. mainly for entry point functions */
+static inline void si_read_lock(struct super_block *sb)
+{
+	rw_read_lock(&stosi(sb)->si_rwsem);
+}
+
+static inline void si_read_unlock(struct super_block *sb)
+{
+	rw_read_unlock(&stosi(sb)->si_rwsem);
+}
+
+static inline void si_write_lock(struct super_block *sb)
+{
+	rw_write_lock(&stosi(sb)->si_rwsem);
+}
+
+static inline void si_write_unlock(struct super_block *sb)
+{
+	rw_write_unlock(&stosi(sb)->si_rwsem);
+}
+
+static inline void SiMustReadLock(struct super_block *sb)
+{
+	RwMustReadLock(&stosi(sb)->si_rwsem);
+}
+
+static inline void SiMustWriteLock(struct super_block *sb)
+{
+	RwMustWriteLock(&stosi(sb)->si_rwsem);
+}
+
+static inline void SiMustAnyLock(struct super_block *sb)
+{
+	RwMustAnyLock(&stosi(sb)->si_rwsem);
+}
 
 #endif /* __KERNEL__ */
 #endif /* __AUFS_SUPER_H__ */

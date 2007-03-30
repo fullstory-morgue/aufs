@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: i_op_ren.c,v 1.30 2007/03/19 04:31:31 sfjro Exp $ */
+/* $Id: i_op_ren.c,v 1.31 2007/03/27 12:51:43 sfjro Exp $ */
 
 //#include <linux/fs.h>
 //#include <linux/namei.h>
@@ -76,7 +76,7 @@ static int do_rename(struct inode *src_dir, struct dentry *src_dentry,
 	}
 
 	wh_dentry[SRC] = wh_dentry[DST] = NULL;
-	lkup.nfsmnt = mnt_nfs(a->sb, a->btgt);
+	lkup.nfsmnt = au_nfsmnt(a->sb, a->btgt);
 	/* create whiteout for src_dentry */
 	if (a->whsrc) {
 		wh_dentry[SRC] = simple_create_wh(src_dentry, a->btgt,
@@ -112,7 +112,7 @@ static int do_rename(struct inode *src_dir, struct dentry *src_dentry,
 		//err = -1;
 		if (unlikely(err))
 			goto out_whtmp;
-		a->hidden_dentry[DST] = h_dptr_i(dentry, a->btgt);
+		a->hidden_dentry[DST] = au_h_dptr_i(dentry, a->btgt);
 	}
 
 	/* cpup src */
@@ -135,12 +135,12 @@ static int do_rename(struct inode *src_dir, struct dentry *src_dentry,
 	need_diropq = a->isdir
 		&& (wh_dentry[DST]
 		    || dbdiropq(dentry) == a->btgt
-		    || IS_MS(a->sb, MS_ALWAYS_DIROPQ));
+		    || au_flag_test(a->sb, AuFlag_ALWAYS_DIROPQ));
 	bycpup = 0;
 	if (dbstart(src_dentry) == a->btgt) {
 		if (need_diropq && dbdiropq(src_dentry) == a->btgt)
 			need_diropq = 0;
-		err = vfsub_rename(hidden_dir[SRC], h_dptr(src_dentry),
+		err = vfsub_rename(hidden_dir[SRC], au_h_dptr(src_dentry),
 				   hidden_dir[DST], a->hidden_dentry[DST],
 				   a->dlgt);
 		//err = -1;
@@ -170,8 +170,9 @@ static int do_rename(struct inode *src_dir, struct dentry *src_dentry,
 	/* make dir opaque */
 	if (need_diropq) {
 		struct dentry *diropq;
-		struct inode *h_inode = h_dptr_i(src_dentry, a->btgt)->d_inode;
+		struct inode *h_inode;
 
+		h_inode = au_h_dptr_i(src_dentry, a->btgt)->d_inode;
 		hdir_lock(h_inode, src_dentry->d_inode, a->btgt);
 		diropq = create_diropq(src_dentry, a->btgt, a->dlgt);
 		//diropq = ERR_PTR(-1);
@@ -193,7 +194,7 @@ static int do_rename(struct inode *src_dir, struct dentry *src_dentry,
 
 	/* remove whtmp */
 	if (tharg) {
-		if (SB_NFS(hidden_dst->d_sb)
+		if (au_is_nfs(hidden_dst->d_sb)
 		    || !is_longer_wh(&a->whlist, a->btgt,
 				     stosi(a->sb)->si_dirwh)) {
 			err = rmdir_whtmp(hidden_dst, &a->whlist, a->btgt, dir,
@@ -219,8 +220,9 @@ static int do_rename(struct inode *src_dir, struct dentry *src_dentry,
 
  out_diropq:
 	if (need_diropq) {
-		struct inode *h_inode = h_dptr_i(src_dentry, a->btgt)->d_inode;
+		struct inode *h_inode;
 
+		h_inode = au_h_dptr_i(src_dentry, a->btgt)->d_inode;
 		// i_lock simplly since inotify is not set to h_inode.
 		hi_lock_parent(h_inode);
 		//hdir_lock(h_inode, src_dentry->d_inode, a->btgt);
@@ -246,7 +248,7 @@ static int do_rename(struct inode *src_dir, struct dentry *src_dentry,
 		}
 		DEBUG_ON(d->d_inode);
 		rerr = vfsub_rename
-			(hidden_dir[DST], h_dptr_i(src_dentry, a->btgt),
+			(hidden_dir[DST], au_h_dptr_i(src_dentry, a->btgt),
 			 hidden_dir[SRC], d, a->dlgt);
 		//rerr = -1;
 		d_drop(d);
@@ -314,7 +316,7 @@ static int do_rename(struct inode *src_dir, struct dentry *src_dentry,
 	bend = dbend(src_dentry);
 	for (bindex = dbstart(src_dentry); bindex <= bend; bindex++) {
 		struct dentry *hd;
-		hd = h_dptr_i(src_dentry, bindex);
+		hd = au_h_dptr_i(src_dentry, bindex);
 		if (hd)
 			d_drop(hd);
 	}
@@ -322,7 +324,7 @@ static int do_rename(struct inode *src_dir, struct dentry *src_dentry,
 	bend = dbend(dentry);
 	for (bindex = dbstart(dentry); bindex <= bend; bindex++) {
 		struct dentry *hd;
-		hd = h_dptr_i(dentry, bindex);
+		hd = au_h_dptr_i(dentry, bindex);
 		if (hd)
 			d_drop(hd);
 	}
@@ -444,11 +446,11 @@ int aufs_rename(struct inode *src_dir, struct dentry *src_dentry,
 		err = may_rename_dstdir(dentry, a.btgt, &a.whlist);
 		set_dbstart(dentry, a.btgt);
 	}
-	a.hidden_dentry[DST] = h_dptr(dentry);
+	a.hidden_dentry[DST] = au_h_dptr(dentry);
 	if (unlikely(err))
 		goto out;
 	a.bstart[SRC] = dbstart(src_dentry);
-	a.hidden_dentry[SRC] = h_dptr(src_dentry);
+	a.hidden_dentry[SRC] = au_h_dptr(src_dentry);
 	if (a.isdir) {
 		err = may_rename_srcdir(src_dentry, a.btgt);
 		if (unlikely(err))
@@ -468,8 +470,8 @@ int aufs_rename(struct inode *src_dir, struct dentry *src_dentry,
 			goto out_children;
 	}
 
-	a.hidden_parent[SRC] = h_dptr_i(a.parent[SRC], a.btgt);
-	a.hidden_parent[DST] = h_dptr_i(a.parent[DST], a.btgt);
+	a.hidden_parent[SRC] = au_h_dptr_i(a.parent[SRC], a.btgt);
+	a.hidden_parent[DST] = au_h_dptr_i(a.parent[DST], a.btgt);
 	dirs[0] = src_dir;
 	dirs[1] = dir;
 	hdir_lock_rename(a.hidden_parent, dirs, a.btgt, a.issamedir);
@@ -481,7 +483,8 @@ int aufs_rename(struct inode *src_dir, struct dentry *src_dentry,
 			    a.hidden_parent[DST]);
 	do_dt_dstdir = 0;
 	if (a.isdir) {
-		dtime_store(dt[CHILD] + SRC, src_dentry, a.hidden_dentry[SRC]);
+		dtime_store(dt[CHILD] + SRC, src_dentry,
+			    a.hidden_dentry[SRC]);
 		if (a.hidden_dentry[DST]->d_inode) {
 			do_dt_dstdir = 1;
 			dtime_store(dt[CHILD] + DST, dentry,
@@ -489,7 +492,6 @@ int aufs_rename(struct inode *src_dir, struct dentry *src_dentry,
 		}
 	}
 
-	//smp_mb();
 	err = do_rename(src_dir, src_dentry, dir, dentry, &a);
 	if (unlikely(err))
 		goto out_dt;
@@ -522,7 +524,7 @@ int aufs_rename(struct inode *src_dir, struct dentry *src_dentry,
 	bend = dbend(src_dentry);
 	for (bindex = a.btgt + 1; bindex <= bend; bindex++) {
 		struct dentry *hd;
-		hd = h_dptr_i(src_dentry, bindex);
+		hd = au_h_dptr_i(src_dentry, bindex);
 		if (hd)
 			set_h_dptr(src_dentry, bindex, NULL);
 	}
@@ -531,7 +533,7 @@ int aufs_rename(struct inode *src_dir, struct dentry *src_dentry,
 	bend = ibend(inode);
 	for (bindex = a.btgt + 1; bindex <= bend; bindex++) {
 		struct inode *hi;
-		hi = h_iptr_i(inode, bindex);
+		hi = au_h_iptr_i(inode, bindex);
 		if (hi)
 			set_h_iptr(inode, bindex, NULL, 0);
 	}

@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: aufs.h,v 1.19 2007/02/26 03:49:24 sfjro Exp $ */
+/* $Id: aufs.h,v 1.20 2007/03/27 12:53:23 sfjro Exp $ */
 
 #ifndef __AUFS_H__
 #define __AUFS_H__
@@ -44,6 +44,13 @@
 #define mutex_lock_nested(mtx, lsc)	mutex_lock(mtx)
 #define down_write_nested(rw, lsc)	down_write(rw)
 #define down_read_nested(rw, lsc)	down_read(rw)
+
+#ifdef CONFIG_LOCKDEP
+# define DECLARE_COMPLETION_ONSTACK(work) \
+	struct completion work = COMPLETION_INITIALIZER_ONSTACK(work)
+#else
+# define DECLARE_COMPLETION_ONSTACK(work) DECLARE_COMPLETION(work)
+#endif
 #endif
 
 /* ---------------------------------------------------------------------- */

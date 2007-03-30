@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: iinfo.c,v 1.26 2007/03/19 04:30:31 sfjro Exp $ */
+/* $Id: iinfo.c,v 1.27 2007/03/27 12:51:43 sfjro Exp $ */
 
 //#include <linux/mm.h>
 #include "aufs.h"
@@ -54,7 +54,7 @@ struct aufs_vdir *ivdir(struct inode *inode)
 	return itoii(inode)->ii_vdir;
 }
 
-struct inode *h_iptr_i(struct inode *inode, aufs_bindex_t bindex)
+struct inode *au_h_iptr_i(struct inode *inode, aufs_bindex_t bindex)
 {
 	struct inode *hidden_inode;
 
@@ -65,9 +65,9 @@ struct inode *h_iptr_i(struct inode *inode, aufs_bindex_t bindex)
 	return hidden_inode;
 }
 
-struct inode *h_iptr(struct inode *inode)
+struct inode *au_h_iptr(struct inode *inode)
 {
-	return h_iptr_i(inode, ibstart(inode));
+	return au_h_iptr_i(inode, ibstart(inode));
 }
 
 unsigned int itoid_index(struct inode *inode, aufs_bindex_t bindex)
@@ -85,7 +85,6 @@ void set_ibstart(struct inode *inode, aufs_bindex_t bindex)
 	IiMustWriteLock(inode);
 	DEBUG_ON(sbend(inode->i_sb) < bindex);
 	itoii(inode)->ii_bstart = bindex;
-	//smp_mb();
 }
 
 void set_ibend(struct inode *inode, aufs_bindex_t bindex)
@@ -94,7 +93,6 @@ void set_ibend(struct inode *inode, aufs_bindex_t bindex)
 	DEBUG_ON(sbend(inode->i_sb) < bindex
 		 || bindex < ibstart(inode));
 	itoii(inode)->ii_bend = bindex;
-	//smp_mb();
 }
 
 void set_ivdir(struct inode *inode, struct aufs_vdir *vdir)
@@ -103,7 +101,6 @@ void set_ivdir(struct inode *inode, struct aufs_vdir *vdir)
 	DEBUG_ON(!S_ISDIR(inode->i_mode)
 		 || (itoii(inode)->ii_vdir && vdir));
 	itoii(inode)->ii_vdir = vdir;
-	//smp_mb();
 }
 
 void aufs_hiput(struct aufs_hinode *hinode)
@@ -120,9 +117,9 @@ unsigned int au_hi_flags(struct inode *inode, int isdir)
 	struct super_block *sb = inode->i_sb;
 
 	flags = 0;
-	if (IS_MS(sb, MS_XINO))
+	if (au_flag_test(sb, AuFlag_XINO))
 		flags = AUFS_HI_XINO;
-	if (unlikely(isdir && IS_MS(sb, MS_UDBA_INOTIFY)))
+	if (unlikely(isdir && au_flag_test(sb, AuFlag_UDBA_INOTIFY)))
 		flags |= AUFS_HI_NOTIFY;
 	return flags;
 }
@@ -155,7 +152,7 @@ void set_h_iptr(struct inode *inode, aufs_bindex_t bindex,
 			if (unlikely(err)) {
 				IOErr1("failed xino_write() %d, force noxino\n",
 				       err);
-				MS_CLR(sb, MS_XINO);
+				au_flag_clr(sb, AuFlag_XINO);
 			}
 		}
 		if (flags & AUFS_HI_NOTIFY) {
@@ -166,7 +163,6 @@ void set_h_iptr(struct inode *inode, aufs_bindex_t bindex,
 				DEBUG_ON(!hinode->hi_notify);
 		}
 	}
-	//smp_mb();
 }
 
 /* it may be called at remount time, too */
@@ -258,7 +254,6 @@ void au_iinfo_fin(struct inode *inode)
 		//iinfo->ii_bstart = iinfo->ii_bend = -1;
 	}
 
-	rw_destroy(&iinfo->ii_rwsem);
 	kfree(iinfo->ii_hinode);
 	//iinfo->ii_hinode = NULL;
 }

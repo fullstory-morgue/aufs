@@ -16,13 +16,12 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: debug.c,v 1.22 2007/03/19 04:30:30 sfjro Exp $ */
+/* $Id: debug.c,v 1.23 2007/03/27 12:51:43 sfjro Exp $ */
 
 #include "aufs.h"
 
-atomic_t aufs_cond = ATOMIC_INIT(0);
-
 #if defined(CONFIG_LKTR) || defined(CONFIG_LKTR_MODULE)
+atomic_t aufs_cond = ATOMIC_INIT(0);
 #define dpri(fmt, arg...)	do { \
 	if (LktrCond) printk(KERN_DEBUG fmt, ##arg); \
 	} while(0)
@@ -96,7 +95,7 @@ static int do_pri_inode(aufs_bindex_t bindex, struct inode *inode)
 	dpri("i%d: i%lu, %s, cnt %d, nlink %u, mode 0%o, sz %Lu, blks %Lu,"
 	     " ctime %Ld, nrpages %lu\n",
 	     bindex,
-	     inode->i_ino, inode->i_sb ? sbtype(inode->i_sb) : "??",
+	     inode->i_ino, inode->i_sb ? au_sbtype(inode->i_sb) : "??",
 	     atomic_read(&inode->i_count), inode->i_nlink, inode->i_mode,
 	     i_size_read(inode), (u64)inode->i_blocks,
 	     timespec_to_ns(&inode->i_ctime) & 0x0ffff,
@@ -111,7 +110,7 @@ void au_dpri_inode(struct inode *inode)
 	int err;
 
 	err = do_pri_inode(-1, inode);
-	if (err || !SB_AUFS(inode->i_sb))
+	if (err || !au_is_aufs(inode->i_sb))
 		return;
 
 	iinfo = itoii(inode);
@@ -133,7 +132,7 @@ static int do_pri_dentry(aufs_bindex_t bindex, struct dentry *dentry)
 	dpri("d%d: %.*s/%.*s, %s, cnt %d, flags 0x%x\n",
 	     bindex,
 	     DLNPair(dentry->d_parent), DLNPair(dentry),
-	     dentry->d_sb ? sbtype(dentry->d_sb) : "??",
+	     dentry->d_sb ? au_sbtype(dentry->d_sb) : "??",
 	     atomic_read(&dentry->d_count), dentry->d_flags);
 	do_pri_inode(bindex, dentry->d_inode);
 	return 0;
@@ -146,7 +145,7 @@ void au_dpri_dentry(struct dentry *dentry)
 	int err;
 
 	err = do_pri_dentry(-1, dentry);
-	if (err || !SB_AUFS(dentry->d_sb))
+	if (err || !au_is_aufs(dentry->d_sb))
 		return;
 
 	dinfo = dtodi(dentry);
@@ -154,7 +153,7 @@ void au_dpri_dentry(struct dentry *dentry)
 		return;
 	dpri("d-1: bstart %d, bend %d, bwh %d, bdiropq %d, gen %d\n",
 	     dinfo->di_bstart, dinfo->di_bend,
-	     dinfo->di_bwh, dinfo->di_bdiropq, digen(dentry));
+	     dinfo->di_bwh, dinfo->di_bdiropq, au_digen(dentry));
 	if (dinfo->di_bstart < 0)
 		return;
 	for (bindex = dinfo->di_bstart; bindex <= dinfo->di_bend; bindex++)
@@ -181,7 +180,7 @@ void au_dpri_file(struct file *file)
 	int err;
 
 	err = do_pri_file(-1, file);
-	if (err || !file->f_dentry || !SB_AUFS(file->f_dentry->d_sb))
+	if (err || !file->f_dentry || !au_is_aufs(file->f_dentry->d_sb))
 		return;
 
 	finfo = ftofi(file);
@@ -212,7 +211,7 @@ static int do_pri_br(aufs_bindex_t bindex, struct aufs_branch *br)
 	dpri("s%d: {perm 0x%x, cnt %d}, "
 	     "%s, flags 0x%lx, cnt(BIAS) %d, active %d, xino %p %p\n",
 	     bindex, br->br_perm, br_count(br),
-	     sbtype(sb), sb->s_flags, sb->s_count - S_BIAS,
+	     au_sbtype(sb), sb->s_flags, sb->s_count - S_BIAS,
 	     atomic_read(&sb->s_active), br->br_xino,
 	     br->br_xino ? br->br_xino->f_dentry : NULL);
 	return 0;
@@ -234,7 +233,7 @@ void au_dpri_sb(struct super_block *sb)
 	atomic_set(&fake.br_count, 0);
 	err = do_pri_br(-1, &fake);
 	dpri("dev 0x%x\n", sb->s_dev);
-	if (err || !SB_AUFS(sb))
+	if (err || !au_is_aufs(sb))
 		return;
 
 	sbinfo = stosi(sb);
