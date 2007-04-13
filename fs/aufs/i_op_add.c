@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: i_op_add.c,v 1.34 2007/03/27 12:51:43 sfjro Exp $ */
+/* $Id: i_op_add.c,v 1.35 2007/04/09 02:45:36 sfjro Exp $ */
 
 //#include <linux/fs.h>
 //#include <linux/namei.h>
@@ -227,8 +227,7 @@ static int add_simple(struct inode *dir, struct dentry *dentry,
 	}
 
 	hdir_unlock(hidden_dir, dir, dbstart(dentry));
-	if (wh_dentry)
-		dput(wh_dentry);
+	dput(wh_dentry);
 
  out:
 	if (unlikely(err)) {
@@ -410,6 +409,7 @@ int aufs_link(struct dentry *src_dentry, struct inode *dir,
 	a.dlgt = need_dlgt(sb);
 	a.bsrc = dbstart(src_dentry);
 	a.bdst = dbstart(dentry);
+	hidden_src_dentry = au_h_dptr(src_dentry);
 	if (unlikely(!au_flag_test(sb, AuFlag_PLINK))) {
 		/*
 		 * copyup src_dentry to the branch we process,
@@ -417,7 +417,8 @@ int aufs_link(struct dentry *src_dentry, struct inode *dir,
 		 * gave up 'pseudo link by cpup' approach,
 		 * since nlink may be one and some applications will not work.
 		 */
-		if (a.bdst < a.bsrc)
+		if (a.bdst < a.bsrc
+		    /* && hidden_src_dentry->d_sb != a.hidden_dentry->d_sb */)
 			err = cpup_before_link(src_dentry, dir, &a);
 		if (!err) {
 			hidden_src_dentry = au_h_dptr(src_dentry);
@@ -426,7 +427,8 @@ int aufs_link(struct dentry *src_dentry, struct inode *dir,
 			//err = -1;
 		}
 	} else {
-		if (a.bdst < a.bsrc)
+		if (a.bdst < a.bsrc
+		    /* && hidden_src_dentry->d_sb != a.hidden_dentry->d_sb */)
 			err = cpup_or_link(src_dentry, &a);
 		else {
 			hidden_src_dentry = au_h_dptr(src_dentry);
@@ -490,8 +492,7 @@ int aufs_link(struct dentry *src_dentry, struct inode *dir,
 	dtime_revert(&dt, !CPUP_LOCKED_GHDIR);
  out_unlock:
 	hdir_unlock(a.hidden_dir, dir, a.bdst);
-	if (wh_dentry)
-		dput(wh_dentry);
+	dput(wh_dentry);
  out:
 	if (unlikely(err)) {
 		au_update_dbstart(dentry);
@@ -588,8 +589,7 @@ int aufs_mkdir(struct inode *dir, struct dentry *dentry, int mode)
 	dtime_revert(&dt, /*fake flag*/CPUP_LOCKED_GHDIR);
  out_unlock:
 	hdir_unlock(hidden_dir, dir, bindex);
-	if (wh_dentry)
-		dput(wh_dentry);
+	dput(wh_dentry);
  out:
 	if (unlikely(err)) {
 		au_update_dbstart(dentry);

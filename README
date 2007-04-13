@@ -2,7 +2,7 @@
 Aufs -- Another Unionfs
 Junjiro Okajima
 
-# $Id: README,v 1.42 2007/03/27 12:45:19 sfjro Exp $
+# $Id: README,v 1.43 2007/04/02 01:14:31 sfjro Exp $
 
 
 0. Introduction
@@ -62,7 +62,8 @@ Aufs is in still development stage, especially,,,
 
 (current work)
 - lockdep
-- support Linux Security Modules (LSM), mainly for Suse AppArmor.
+- support Linux Security Modules (LSM) and a delegation of the
+  internal branch access, mainly for Suse AppArmor.
 - nested mount, i.e. aufs as readonly no-whiteout branch of another aufs.
 
 (just an idea)
@@ -75,6 +76,7 @@ Aufs is in still development stage, especially,,,
 - SMP, because I don't have such machine. But several users reported
   aufs is working fine.
 - 64bit environment, because I don't have such machine.
+- copyup in userspace
 - xattr, acl
 - disk quota (unnecessary?)
 - and documentation

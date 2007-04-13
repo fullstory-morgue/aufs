@@ -16,10 +16,9 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: whout.c,v 1.8 2007/03/27 12:50:47 sfjro Exp $ */
+/* $Id: whout.c,v 1.10 2007/04/09 02:47:35 sfjro Exp $ */
 
 #include <linux/fs.h>
-#include <linux/kthread.h>
 #include <linux/namei.h>
 #include <linux/random.h>
 #include <linux/security.h>
@@ -290,15 +289,62 @@ static int unlink_wh_name(struct dentry *hidden_parent, struct qstr *wh,
 
 /* ---------------------------------------------------------------------- */
 
+static void clean_wh(struct inode *h_dir, struct dentry *wh)
+{
+	TraceEnter();
+	if (wh->d_inode) {
+		int err = vfsub_unlink(h_dir, wh, /*dlgt*/0);
+		if (unlikely(err))
+			Warn("failed unlink %.*s (%d), ignored.\n",
+			     DLNPair(wh), err);
+	}
+}
+
+static void clean_plink(struct inode *h_dir, struct dentry *plink)
+{
+	TraceEnter();
+	if (plink->d_inode) {
+		int err = vfsub_rmdir(h_dir, plink, /*dlgt*/0);
+		if (unlikely(err))
+			Warn("failed rmdir %.*s (%d), ignored.\n",
+			     DLNPair(plink), err);
+	}
+}
+
+static int test_linkable(struct inode *h_dir)
+{
+	if (h_dir->i_op && h_dir->i_op->link)
+		return 0;
+	return -ENOSYS;
+}
+
+static int plink_dir(struct inode *h_dir, struct dentry *plink)
+{
+	int err;
+
+	err = -EEXIST;
+	if (!plink->d_inode) {
+		int mode = S_IRWXU;
+		if (unlikely(au_is_nfs(plink->d_sb)))
+			mode |= S_IXUGO;
+		err = vfsub_mkdir(h_dir, plink, mode, /*dlgt*/0);
+	} else if (S_ISDIR(plink->d_inode->i_mode))
+		err = 0;
+	else
+		Err("unknown %.*s exists\n", DLNPair(plink));
+
+	return err;
+}
+
 /*
- * initialize the whiteout base file for @br.
+ * initialize the whiteout base file/dir for @br.
  */
-int init_wh(struct dentry *hidden_root, struct aufs_branch *br,
-	    struct vfsmount *nfsmnt)
+int init_wh(struct dentry *h_root, struct aufs_branch *br,
+	    struct vfsmount *nfsmnt, struct super_block *sb)
 {
 	int err;
 	struct dentry *wh, *plink;
-	struct inode *hidden_dir;
+	struct inode *h_dir;
 	static struct qstr base_name[] = {
 		{.name = AUFS_WH_BASENAME, .len = sizeof(AUFS_WH_BASENAME) - 1},
 		{.name = AUFS_WH_PLINKDIR, .len = sizeof(AUFS_WH_PLINKDIR) - 1}
@@ -307,62 +353,109 @@ int init_wh(struct dentry *hidden_root, struct aufs_branch *br,
 		.nfsmnt	= nfsmnt,
 		.dlgt	= 0 // always no dlgt
 	};
+	const int do_plink = au_flag_test(sb, AuFlag_PLINK);
 
 	LKTRTrace("nfsmnt %p\n", nfsmnt);
-
-	hidden_dir = hidden_root->d_inode;
-	IMustLock(hidden_dir);
-	DEBUG_ON(!hidden_dir->i_op || !hidden_dir->i_op->link);
 	BrWhMustWriteLock(br);
+	SiMustWriteLock(sb);
+	h_dir = h_root->d_inode;
+	IMustLock(h_dir);
 
 	// doubly whiteouted
-	wh = lkup_wh(hidden_root, base_name + 0, &lkup);
+	wh = lkup_wh(h_root, base_name + 0, &lkup);
 	//if (LktrCond) {dput(wh); wh = ERR_PTR(-1);}
 	err = PTR_ERR(wh);
 	if (IS_ERR(wh))
 		goto out;
-	plink = br->br_plink;
-	if (!br->br_plink) {
-		plink = lkup_wh(hidden_root, base_name + 1, &lkup);
-		err = PTR_ERR(plink);
-		if (IS_ERR(plink))
-			goto out_wh;
+	DEBUG_ON(br->br_wh && br->br_wh != wh);
+
+	plink = lkup_wh(h_root, base_name + 1, &lkup);
+	err = PTR_ERR(plink);
+	if (IS_ERR(plink))
+		goto out_dput_wh;
+	DEBUG_ON(br->br_plink && br->br_plink != plink);
+
+	dput(br->br_wh);
+	dput(br->br_plink);
+	br->br_wh = br->br_plink = NULL;
+
+	err = 0;
+	switch (br->br_perm) {
+	case AuBr_RR:
+	case AuBr_RO:
+	case AuBr_RRWH:
+	case AuBr_ROWH:
+		clean_wh(h_dir, wh);
+		clean_plink(h_dir, plink);
+		break;
+
+	case AuBr_RWNoLinkWH:
+		clean_wh(h_dir, wh);
+		if (do_plink) {
+			err = test_linkable(h_dir);
+			if (unlikely(err))
+				goto out_nolink;
+
+			err = plink_dir(h_dir, plink);
+			if (unlikely(err))
+				goto out_err;
+			br->br_plink = dget(plink);
+		} else
+			clean_plink(h_dir, plink);
+		break;
+
+	case AuBr_RW:
+		/*
+		 * for the moment, aufs supports the branch filesystem
+		 * which does not support link(2).
+		 * testing on FAT which does not support i_op->setattr() fully either,
+		 * copyup failed.
+		 * finally, such filesystem will not be used as the writable branch.
+		 */
+		err = test_linkable(h_dir);
+		if (unlikely(err))
+			goto out_nolink;
+
+		err = -EEXIST;
+		if (!wh->d_inode)
+			err = vfsub_create(h_dir, wh, WH_MASK, NULL, /*dlgt*/0);
+		else if (S_ISREG(wh->d_inode->i_mode))
+			err = 0;
+		else
+			Err("unknown %.*s/%.*s exists\n",
+			    DLNPair(h_root), DLNPair(wh));
+		if (unlikely(err))
+			goto out_err;
+
+		if (do_plink) {
+			err = plink_dir(h_dir, plink);
+			if (unlikely(err))
+				goto out_err;
+			br->br_plink = dget(plink);
+		} else
+			clean_plink(h_dir, plink);
+		br->br_wh = dget(wh);
+		break;
+
+	default:
+		BUG();
 	}
 
-	err = -EEXIST;
-	if (wh->d_inode) {
-		if (S_ISREG(wh->d_inode->i_mode))
-			err = 0;
-	} else
-		err = vfsub_create(hidden_dir, wh, WH_MASK, NULL, /*dlgt*/0);
-		//if (LktrCond) {vfs_unlink(hidden_dir, wh); err = -1;}
-	if (unlikely(err))
-		goto out_plink;
-
-	err = -EEXIST;
-	if (plink->d_inode) {
-		if (S_ISDIR(plink->d_inode->i_mode))
-			err = 0;
-	} else {
-		int mode = S_IRWXU;
-		if (unlikely(au_is_nfs(plink->d_sb)))
-			mode |= S_IXUGO;
-		err = vfsub_mkdir(hidden_dir, plink, mode, /*dlgt*/0);
-	}
-	if (unlikely(err))
-		goto out_plink;
-
-	br->br_wh = wh;
-	br->br_plink = plink;
-	return 0; /* success */
-
- out_plink:
+ out_dput:
 	dput(plink);
- out_wh:
+ out_dput_wh:
 	dput(wh);
  out:
 	TraceErr(err);
 	return err;
+ out_nolink:
+	Err("%.*s doesn't support link(2), use noplink and rw+nolwh\n",
+	    DLNPair(h_root));
+	goto out_dput;
+ out_err:
+	Err("an error(%d) on the writable branch %.*s(%s)\n",
+	    err, DLNPair(h_root), au_sbtype(h_root->d_sb));
+	goto out_dput;
 }
 
 struct reinit_br_wh {
@@ -370,7 +463,7 @@ struct reinit_br_wh {
 	struct aufs_branch *br;
 };
 
-static int reinit_br_wh(void *arg)
+static void reinit_br_wh(void *arg)
 {
 	int err;
 	struct reinit_br_wh *a = arg;
@@ -382,8 +475,9 @@ static int reinit_br_wh(void *arg)
 	DEBUG_ON(!a->br->br_wh || !a->br->br_wh->d_inode || current->fsuid);
 
 	err = 0;
-	si_read_lock(a->sb);
-	if (unlikely(a->br->br_perm != AuBrPerm_RW))
+	/* big lock */
+	si_write_lock(a->sb);
+	if (unlikely(!br_writable(a->br->br_perm)))
 		goto out;
 	bindex = find_brindex(a->sb, a->br->br_id);
 	if (unlikely(bindex < 0))
@@ -400,27 +494,24 @@ static int reinit_br_wh(void *arg)
 	dput(a->br->br_wh);
 	a->br->br_wh = NULL;
 	if (!err)
-		err = init_wh(hidden_root, a->br, au_do_nfsmnt(a->br->br_mnt));
+		err = init_wh(hidden_root, a->br, au_do_nfsmnt(a->br->br_mnt),
+			      a->sb);
 	br_wh_write_unlock(a->br);
 	hdir_unlock(hidden_dir, dir, bindex);
 
  out:
 	atomic_dec(&a->br->br_wh_running);
 	br_put(a->br);
-	si_read_unlock(a->sb);
+	si_write_unlock(a->sb);
 	kfree(arg);
 	if (unlikely(err))
 		IOErr("err %d\n", err);
-	do_exit(err);
-	return err;
 }
 
 static void kick_reinit_br_wh(struct super_block *sb, struct aufs_branch *br)
 {
 	int do_dec;
 	struct reinit_br_wh *arg;
-	static DECLARE_WAIT_QUEUE_HEAD(wq);
-	struct task_struct *tsk;
 
 	do_dec = 1;
 	if (atomic_inc_return(&br->br_wh_running) != 1)
@@ -433,10 +524,7 @@ static void kick_reinit_br_wh(struct super_block *sb, struct aufs_branch *br)
 		arg->sb = sb;
 		arg->br = br;
 		br_get(br);
-		smp_mb();
-		wait_event(wq, !IS_ERR(tsk = kthread_run
-				       (reinit_br_wh, arg,
-					AUFS_NAME "_reinit_br_wh")));
+		wkq_nowait(reinit_br_wh, arg, /*dlgt*/0);
 		do_dec = 0;
 	}
 
@@ -782,7 +870,7 @@ int rmdir_whtmp(struct dentry *hidden_dentry, struct aufs_nhash *whlist,
 	return err;
 }
 
-static int do_rmdir_whtmp(void *arg)
+static void do_rmdir_whtmp(void *arg)
 {
 	int err;
 	struct rmdir_whtmp_arg *a = arg;
@@ -816,17 +904,12 @@ static int do_rmdir_whtmp(void *arg)
 	kfree(arg);
 	if (unlikely(err))
 		IOErr("err %d\n", err);
-	do_exit(err);
-	return err;
 }
 
 void kick_rmdir_whtmp(struct dentry *hidden_dentry, struct aufs_nhash *whlist,
 		      aufs_bindex_t bindex, struct inode *dir,
 		      struct inode *inode, struct rmdir_whtmp_arg *arg)
 {
-	static DECLARE_WAIT_QUEUE_HEAD(wq);
-	struct task_struct *tsk;
-
 	LKTRTrace("%.*s\n", DLNPair(hidden_dentry));
 	IMustLock(dir);
 
@@ -837,11 +920,6 @@ void kick_rmdir_whtmp(struct dentry *hidden_dentry, struct aufs_nhash *whlist,
 	arg->bindex = bindex;
 	arg->dir = igrab(dir);
 	arg->inode = igrab(inode);
-	smp_mb();
-	wait_event(wq, !IS_ERR(tsk = kthread_run
-			       (do_rmdir_whtmp, arg,
-				AUFS_NAME "_rmdir_whtmp")));
 
-	// hoping do_rmdir_whtmp is the first waiter of 'dir' lock
-	yield();
+	wkq_nowait(do_rmdir_whtmp, arg, /*dlgt*/0);
 }

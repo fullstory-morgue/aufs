@@ -16,15 +16,13 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: debug.c,v 1.23 2007/03/27 12:51:43 sfjro Exp $ */
+/* $Id: debug.c,v 1.24 2007/04/09 02:47:10 sfjro Exp $ */
 
 #include "aufs.h"
 
 #if defined(CONFIG_LKTR) || defined(CONFIG_LKTR_MODULE)
 atomic_t aufs_cond = ATOMIC_INIT(0);
-#define dpri(fmt, arg...)	do { \
-	if (LktrCond) printk(KERN_DEBUG fmt, ##arg); \
-	} while(0)
+#define dpri(fmt, arg...)	if (LktrCond) printk(KERN_DEBUG fmt, ##arg)
 #else
 #define dpri(fmt, arg...)	printk(KERN_DEBUG fmt, ##arg)
 #endif

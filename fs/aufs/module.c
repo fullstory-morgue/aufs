@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: module.c,v 1.6 2007/03/27 12:49:49 sfjro Exp $ */
+/* $Id: module.c,v 1.7 2007/04/09 02:47:10 sfjro Exp $ */
 
 //#include <linux/init.h>
 //#include <linux/kobject.h>
@@ -33,9 +33,8 @@
 struct kmem_cache *aufs_cachep[AuCache_Last];
 static int __init create_cache(void)
 {
-#define Cache(type) \
-	kmem_cache_create(#type, sizeof(struct type), 0, \
-			  SLAB_RECLAIM_ACCOUNT, NULL, NULL)
+#define Cache(type) kmem_cache_create(#type, sizeof(struct type), 0, \
+				      SLAB_RECLAIM_ACCOUNT, NULL, NULL)
 
 	if ((aufs_cachep[AuCache_DINFO] = Cache(aufs_dinfo))
 	    && (aufs_cachep[AuCache_ICNTNR] = Cache(aufs_icntnr))

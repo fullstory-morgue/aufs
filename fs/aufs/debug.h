@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: debug.h,v 1.25 2007/03/27 12:45:59 sfjro Exp $ */
+/* $Id: debug.h,v 1.26 2007/04/09 02:44:47 sfjro Exp $ */
 
 #ifndef __AUFS_DEBUG_H__
 #define __AUFS_DEBUG_H__
@@ -54,14 +54,8 @@ extern atomic_t aufs_cond;
 #define LKTRLabel(label)		/* */
 #endif /* CONFIG_LKTR */
 
-#define TraceErr(e)	do { \
-	if (unlikely((e) < 0)) \
-		LKTRTrace("err %d\n", (int)(e)); \
-	}while(0)
-#define TraceErrPtr(p)	do { \
-	if (IS_ERR(p)) \
-		TraceErr(PTR_ERR(p)); \
-	}while(0)
+#define TraceErr(e)	if (unlikely((e) < 0)) LKTRTrace("err %d\n", (int)(e))
+#define TraceErrPtr(p)	if (IS_ERR(p)) LKTRTrace("err %ld\n", PTR_ERR(p))
 #define TraceEnter()	LKTRLabel(enter)
 
 /* dirty macros for debug print, use with "%.*s" and caution */

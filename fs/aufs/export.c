@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: export.c,v 1.1 2007/03/27 12:52:39 sfjro Exp $ */
+/* $Id: export.c,v 1.3 2007/04/09 02:45:00 sfjro Exp $ */
 
 #include "aufs.h"
 
@@ -306,8 +306,10 @@ decode_by_path(struct super_block *sb, aufs_bindex_t bindex, __u32 *fh,
 
 	dentry = ERR_PTR(-ENOMEM);
 	path = __getname();
-	if (unlikely(!path))
+	if (unlikely(!path)) {
+		dput(h_parent);
 		goto out;
+	}
 
 	root = sb->s_root;
 	di_read_lock_parent(root, !AUFS_I_RLOCK);
@@ -387,6 +389,7 @@ aufs_decode_fh(struct super_block *sb, __u32 *fh, int fh_len, int fh_type,
 	DEBUG_ON(fh_len < Fh_tail);
 
 	si_read_lock(sb);
+	lockdep_off();
 
 	/* branch id may be wrapped around */
 	dentry = ERR_PTR(-ESTALE);
@@ -436,6 +439,7 @@ aufs_decode_fh(struct super_block *sb, __u32 *fh, int fh_len, int fh_type,
  out_stale:
 	dentry = ERR_PTR(-ESTALE);
  out:
+	lockdep_on();
 	si_read_unlock(sb);
 	TraceErrPtr(dentry);
 	//atomic_dec(&aufs_cond);

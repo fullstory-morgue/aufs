@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: f_op.c,v 1.21 2007/03/27 12:49:00 sfjro Exp $ */
+/* $Id: f_op.c,v 1.22 2007/04/09 02:44:47 sfjro Exp $ */
 
 #include <linux/fsnotify.h>
 #include <linux/pagemap.h>
@@ -130,7 +130,8 @@ static ssize_t aufs_read(struct file *file, char __user *buf, size_t count,
 	int dlgt;
 
 	dentry = file->f_dentry;
-	LKTRTrace("%.*s, cnt %d, pos %Ld\n", DLNPair(dentry), count, *ppos);
+	LKTRTrace("%.*s, cnt %lu, pos %Ld\n",
+		  DLNPair(dentry), (unsigned long)count, *ppos);
 
 	sb = dentry->d_sb;
 	si_read_lock(sb);
@@ -177,7 +178,8 @@ static ssize_t aufs_write(struct file *file, const char __user *__buf,
 	int dlgt;
 
 	dentry = file->f_dentry;
-	LKTRTrace("%.*s, cnt %d, pos %Ld\n", DLNPair(dentry), count, *ppos);
+	LKTRTrace("%.*s, cnt %lu, pos %Ld\n",
+		  DLNPair(dentry), (unsigned long)count, *ppos);
 
 	inode = dentry->d_inode;
 	i_lock(inode);
@@ -467,8 +469,8 @@ static ssize_t aufs_sendfile(struct file *file, loff_t *ppos,
 	struct super_block *sb;
 
 	dentry = file->f_dentry;
-	LKTRTrace("%.*s, pos %Ld, cnt %d, loopback %d\n",
-		  DLNPair(dentry), *ppos, count, loopback);
+	LKTRTrace("%.*s, pos %Ld, cnt %lu, loopback %d\n",
+		  DLNPair(dentry), *ppos, (unsigned long)count, loopback);
 
 	sb = dentry->d_sb;
 	si_read_lock(sb);

@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: vfsub.h,v 1.4 2007/03/27 12:48:16 sfjro Exp $ */
+/* $Id: vfsub.h,v 1.5 2007/04/02 01:14:31 sfjro Exp $ */
 
 #ifndef __AUFS_VFSUB_H__
 #define __AUFS_VFSUB_H__
@@ -129,6 +129,7 @@ ssize_t do_vfsub_read_u(struct file *file, char __user *ubuf, size_t count,
 	return err;
 }
 
+// kernel_read() ??
 static inline
 ssize_t do_vfsub_read_k(struct file *file, void *kbuf, size_t count,
 			loff_t *ppos)

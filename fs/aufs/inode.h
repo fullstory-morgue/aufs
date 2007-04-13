@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: inode.h,v 1.26 2007/03/27 12:46:53 sfjro Exp $ */
+/* $Id: inode.h,v 1.27 2007/04/02 01:13:38 sfjro Exp $ */
 
 #ifndef __AUFS_INODE_H__
 #define __AUFS_INODE_H__
@@ -96,6 +96,23 @@ void au_update_brange(struct inode *inode, int do_put_zero);
 
 int au_iinfo_init(struct inode *inode);
 void au_iinfo_fin(struct inode *inode);
+
+//plink.c
+#ifdef CONFIG_AUFS_DEBUG
+void au_list_plink(struct super_block *sb);
+#else
+static inline void au_list_plink(struct super_block *sb)
+{
+	/* nothing */
+}
+#endif
+int au_is_plinked(struct super_block *sb, struct inode *inode);
+struct dentry *lkup_plink(struct super_block *sb, aufs_bindex_t bindex,
+			  struct inode *inode);
+void append_plink(struct super_block *sb, struct inode *inode,
+		  struct dentry *h_dentry, aufs_bindex_t bindex);
+void au_put_plink(struct super_block *sb);
+void half_refresh_plink(struct super_block *sb, aufs_bindex_t br_id);
 
 /* ---------------------------------------------------------------------- */
 

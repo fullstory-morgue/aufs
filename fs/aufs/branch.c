@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: branch.c,v 1.43 2007/03/27 12:48:38 sfjro Exp $ */
+/* $Id: branch.c,v 1.44 2007/04/09 02:44:16 sfjro Exp $ */
 
 //#include <linux/fs.h>
 //#include <linux/namei.h>
@@ -24,12 +24,12 @@
 
 static void free_branch(struct aufs_branch *br)
 {
+	TraceEnter();
+
 	if (br->br_xino)
 		fput(br->br_xino);
-	if (unlikely(br->br_wh))
-		dput(br->br_wh);
-	if (unlikely(br->br_plink))
-		dput(br->br_plink);
+	dput(br->br_wh);
+	dput(br->br_plink);
 	mntput(br->br_mnt);
 	DEBUG_ON(br_count(br) || atomic_read(&br->br_wh_running));
 	kfree(br);
@@ -72,7 +72,7 @@ int find_brindex(struct super_block *sb, aufs_bindex_t br_id)
 int br_rdonly(struct aufs_branch *br)
 {
 	return ((br->br_mnt->mnt_sb->s_flags & MS_RDONLY)
-		|| br->br_perm != AuBrPerm_RW)
+		|| !br_writable(br->br_perm))
 		? -EROFS : 0;
 }
 
@@ -189,6 +189,40 @@ static int is_overlap(struct super_block *sb, struct dentry *hidden_d1,
 
 /* ---------------------------------------------------------------------- */
 
+static int init_br_wh(struct super_block *sb, aufs_bindex_t bindex,
+		      struct aufs_branch *br, int new_perm,
+		      struct dentry *h_root, struct vfsmount *h_mnt)
+{
+	int err, old_perm;
+	struct inode *dir = sb->s_root->d_inode,
+		*h_dir = h_root->d_inode;
+	const int new = (bindex < 0);
+
+	LKTRTrace("b%d, new_perm %d\n", bindex, new_perm);
+
+	if (new)
+		hi_lock_parent(h_dir);
+	else
+		hdir_lock(h_dir, dir, bindex);
+
+	br_wh_write_lock(br);
+	old_perm = br->br_perm;
+	br->br_perm = new_perm;
+	err = init_wh(h_root, br, au_do_nfsmnt(h_mnt), sb);
+	br->br_perm = old_perm;
+	br_wh_write_unlock(br);
+
+	if (new)
+		i_unlock(h_dir);
+	else
+		hdir_unlock(h_dir, dir, bindex);
+
+	TraceErr(err);
+	return err;
+}
+
+/* ---------------------------------------------------------------------- */
+
 /*
  * returns a newly allocated branch. @new_nbranch is a number of branches
  * after adding a branch.
@@ -261,7 +295,7 @@ static int test_br(struct super_block *sb, struct inode *inode, int brperm,
 	int err;
 
 	err = 0;
-	if (unlikely(brperm == AuBrPerm_RW && IS_RDONLY(inode))) {
+	if (unlikely(br_writable(brperm) && IS_RDONLY(inode))) {
 		Err("write permission for readonly fs or inode, %s\n", path);
 		err = -EINVAL;
 	}
@@ -402,28 +436,13 @@ int br_add(struct super_block *sb, struct opt_add *add, int remount)
 	err = PTR_ERR(add_branch);
 	if (IS_ERR(add_branch))
 		goto out;
-	add_branch->br_plink = NULL;
-	/*
-	 * for the moment, aufs supports the branch filesystem
-	 * which does not support link(2).
-	 * testing on FAT which does not support i_op->setattr() fully either,
-	 * copyup failed.
-	 * finally, such filesystem will not be used as the writable branch.
-	 */
-	if (add->perm != AuBrPerm_RW
-	    || !add->nd.dentry->d_inode->i_op
-	    || !add->nd.dentry->d_inode->i_op->link) {
-		rw_init_nolock(&add_branch->br_wh_rwsem);
-		add_branch->br_wh = NULL;
-	} else {
-		hi_lock_parent(add->nd.dentry->d_inode);
-		rw_init_wlock(&add_branch->br_wh_rwsem);
-		err = init_wh(add->nd.dentry, add_branch,
-			      au_do_nfsmnt(add->nd.mnt));
-		//if (LktrCond)
-		//{dput(add_branch->br_wh); add_branch->br_wh = NULL; err = -1;}
-		br_wh_write_unlock(add_branch);
-		i_unlock(add->nd.dentry->d_inode);
+
+	err = 0;
+	rw_init_nolock(&add_branch->br_wh_rwsem);
+	add_branch->br_wh = add_branch->br_plink = NULL;
+	if (unlikely(br_writable(add->perm))) {
+		err = init_br_wh(sb, /*bindex*/-1, add_branch, add->perm,
+				 add->nd.dentry, add->nd.mnt);
 		if (unlikely(err)) {
 			kfree(add_branch);
 			goto out;
@@ -435,7 +454,6 @@ int br_add(struct super_block *sb, struct opt_add *add, int remount)
 	add_branch->br_id = new_br_id(sb);
 	add_branch->br_perm = add->perm;
 	atomic_set(&add_branch->br_count, 0);
-	err = 0;
 
 	sbinfo = stosi(sb);
 	dinfo = dtodi(root);
@@ -573,12 +591,11 @@ int br_del(struct super_block *sb, struct opt_del *del, int remount)
 	int err, do_wh, rerr;
 	struct dentry *root;
 	struct inode *inode, *hidden_dir;
-	aufs_bindex_t bindex, bend;
+	aufs_bindex_t bindex, bend, br_id;
 	struct aufs_sbinfo *sbinfo;
 	struct aufs_dinfo *dinfo;
 	struct aufs_iinfo *iinfo;
 	struct aufs_branch *br;
-	aufs_bindex_t br_id;
 
 	LKTRTrace("%s, %.*s\n", del->path, DLNPair(del->h_root));
 	SiMustWriteLock(sb);
@@ -606,23 +623,30 @@ int br_del(struct super_block *sb, struct opt_del *del, int remount)
 	}
 
 	do_wh = 0;
-	if (unlikely(br->br_wh)) {
-		//no need to lock br_wh_rwsem
+	hidden_dir = del->h_root->d_inode;
+	if (unlikely(br->br_wh || br->br_plink)) {
+#if 0
+		/* remove whiteout base */
+		err = init_br_wh(sb, bindex, br, AuBr_RO, del->h_root,
+				 br->br_mnt);
+		if (unlikely(err))
+			goto out;
+#else
 		dput(br->br_wh);
-		br->br_wh = NULL;
-		do_wh = 1;
-		DEBUG_ON(!br->br_plink);
 		dput(br->br_plink);
-		br->br_plink = NULL;
+		br->br_wh = br->br_plink = NULL;
+#endif
+		do_wh = 1;
 	}
 
+	err = -EBUSY;
 	if (unlikely(test_children(root, bindex))) {
 		if (unlikely(do_wh))
 			goto out_wh;
 		goto out;
 	}
-	err = 0;
 
+	err = 0;
 	sbinfo = stosi(sb);
 	dinfo = dtodi(root);
 	iinfo = itoii(inode);
@@ -675,39 +699,28 @@ int br_del(struct super_block *sb, struct opt_del *del, int remount)
 
  out_wh:
 	/* revert */
-	hidden_dir = del->h_root->d_inode;
-	if (hidden_dir->i_op && hidden_dir->i_op->link) {
-		struct inode *dir = sb->s_root->d_inode;
-		hdir_lock(hidden_dir, dir, bindex);
-		br_wh_write_lock(br);
-		rerr = init_wh(del->h_root, br, au_do_nfsmnt(br->br_mnt));
-		br_wh_write_unlock(br);
-		hdir_unlock(hidden_dir, dir, bindex);
-		if (rerr)
-			Warn("failed re-creating base whiteout, %s. (%d)\n",
-			     del->path, rerr);
-	}
+	rerr = init_br_wh(sb, bindex, br, br->br_perm, del->h_root, br->br_mnt);
+	if (rerr)
+		Warn("failed re-creating base whiteout, %s. (%d)\n",
+		     del->path, rerr);
  out:
 	TraceErr(err);
 	return err;
 }
 
-static int do_need_sigen_inc(unsigned int a, unsigned int b)
+static int do_need_sigen_inc(int a, int b)
 {
-	return (au_is_whable(a) && !au_is_whable(b));
+	return (br_whable(a) && !br_whable(b));
 }
 
-static int need_sigen_inc(unsigned int old, unsigned int new)
+static int need_sigen_inc(int old, int new)
 {
 	return (do_need_sigen_inc(old, new)
 		|| do_need_sigen_inc(new, old));
 }
 
-/*
- * returns tri-status.
- * plus means the si_generation needs to be incremented later.
- */
-int br_mod(struct super_block *sb, struct opt_mod *mod, int remount)
+int br_mod(struct super_block *sb, struct opt_mod *mod, int remount,
+	   int *do_update)
 {
 	int err;
 	struct dentry *root;
@@ -741,19 +754,24 @@ int br_mod(struct super_block *sb, struct opt_mod *mod, int remount)
 	if (unlikely(br->br_perm == mod->perm))
 		return 0; /* success */
 
-	if (br->br_perm == AuBrPerm_RW) {
-		if (mod->perm != AuBrPerm_RW) {
+	if (br_writable(br->br_perm)) {
+#if 1
+		/* remove whiteout base */
+		//todo: mod->perm?
+		err = init_br_wh(sb, bindex, br, AuBr_RO, mod->h_root,
+				 br->br_mnt);
+		if (unlikely(err))
+			goto out;
+#else
+		dput(br->br_wh);
+		dput(br->br_plink);
+		br->br_wh = br->br_plink = NULL;
+#endif
+
+		if (!br_writable(mod->perm)) {
 			/* rw --> ro, file might be mmapped */
 			struct file *file, *hf;
 
-			if (br->br_wh) {
-				// no need to lock br_wh_rwsem
-				dput(br->br_wh);
-				br->br_wh = NULL;
-				DEBUG_ON(!br->br_plink);
-				dput(br->br_plink);
-				br->br_plink = NULL;
-			}
 #if 1 // test here
 			DiMustNoWaiters(root);
 			IiMustNoWaiters(root->d_inode);
@@ -781,19 +799,9 @@ int br_mod(struct super_block *sb, struct opt_mod *mod, int remount)
 			di_write_lock_child(root);
 #endif
 		}
-	} else if (mod->perm == AuBrPerm_RW && !br->br_wh
-		   && hidden_dir->i_op && hidden_dir->i_op->link) {
-		struct inode *dir = sb->s_root->d_inode;
-		hdir_lock(hidden_dir, dir, bindex);
-		br_wh_write_lock(br);
-		err = init_wh(mod->h_root, br, au_do_nfsmnt(br->br_mnt));
-		br_wh_write_unlock(br);
-		hdir_unlock(hidden_dir, dir, bindex);
-		if (unlikely(err))
-			goto out;
 	}
 
-	err = need_sigen_inc(br->br_perm, mod->perm);
+	*do_update |= need_sigen_inc(br->br_perm, mod->perm);
 	br->br_perm = mod->perm;
 	return err; /* success */
 

@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: branch.h,v 1.26 2007/03/27 12:45:36 sfjro Exp $ */
+/* $Id: branch.h,v 1.27 2007/04/09 02:44:32 sfjro Exp $ */
 
 #ifndef __AUFS_BRANCH_H__
 #define __AUFS_BRANCH_H__
@@ -52,15 +52,37 @@ struct aufs_branch {
 
 /* ---------------------------------------------------------------------- */
 
-/* branch permissions */
+/* branch permission and attribute */
 enum {
-	AuBrPerm_RW = 1,	/* writable branch */
-	AuBrPerm_RO,		/* readonly and no whiteout branch */
-	AuBrPerm_ROWH,		/* whiteout may exist on readonly branch */
-	AuBrPerm_RR,		/* natively readonly and no whiteout branch */
-	AuBrPerm_RRWH,	/* whiteout may exist on natively readonly branch */
-	AuBrPerm_Last
+	AuBr_RW,		/* writable, linkable wh */
+	AuBr_RO,		/* readonly, no wh */
+	AuBr_RR,		/* natively readonly, no wh */
+
+	AuBr_RWNoLinkWH,	/* un-linkable whiteouts */
+
+	AuBr_ROWH,
+	AuBr_RRWH,		/* whiteout-able */
+
+	AuBr_Last
 };
+
+static inline int br_writable(int brperm)
+{
+	return (brperm == AuBr_RW
+		|| brperm == AuBr_RWNoLinkWH);
+}
+
+static inline int br_whable(int brperm)
+{
+	return (brperm == AuBr_RW
+		|| brperm == AuBr_ROWH
+		|| brperm == AuBr_RRWH);
+}
+
+static inline int br_linkable_wh(int brperm)
+{
+	return (brperm == AuBr_RW);
+}
 
 /* ---------------------------------------------------------------------- */
 
@@ -88,7 +110,8 @@ int br_add(struct super_block *sb, struct opt_add *add, int remount);
 struct opt_del;
 int br_del(struct super_block *sb, struct opt_del *del, int remount);
 struct opt_mod;
-int br_mod(struct super_block *sb, struct opt_mod *mod, int remount);
+int br_mod(struct super_block *sb, struct opt_mod *mod, int remount,
+	   int *do_update);
 
 /* ---------------------------------------------------------------------- */
 
@@ -149,16 +172,9 @@ static inline int sbr_perm(struct super_block *sb, aufs_bindex_t bindex)
 	return stobr(sb, bindex)->br_perm;
 }
 
-static inline int au_is_whable(int perm)
-{
-	return (perm == AuBrPerm_RW
-		|| perm == AuBrPerm_ROWH
-		|| perm == AuBrPerm_RRWH);
-}
-
 static inline int sbr_is_whable(struct super_block *sb, aufs_bindex_t bindex)
 {
-	return au_is_whable(sbr_perm(sb, bindex));
+	return br_whable(sbr_perm(sb, bindex));
 }
 
 /* ---------------------------------------------------------------------- */

@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: vfsub.c,v 1.2 2007/03/27 12:50:29 sfjro Exp $ */
+/* $Id: vfsub.c,v 1.4 2007/04/09 02:47:22 sfjro Exp $ */
 // I'm going to slightly mad
 
 #include "aufs.h"
@@ -294,15 +294,15 @@ struct read_args {
 static void call_read_k(void *args)
 {
 	struct read_args *a = args;
+	LKTRTrace("%.*s, cnt %lu, pos %Ld\n",
+		  DLNPair(a->file->f_dentry), (unsigned long)a->count,
+		  *a->ppos);
 	*a->errp = do_vfsub_read_k(a->file, a->kbuf, a->count, a->ppos);
 }
 
 ssize_t vfsub_read_u(struct file *file, char __user *ubuf, size_t count,
 		     loff_t *ppos, int dlgt)
 {
-	if (unlikely(!count))
-		return 0;
-
 	if (!dlgt)
 		return do_vfsub_read_u(file, ubuf, count, ppos);
 	else {
@@ -314,12 +314,16 @@ ssize_t vfsub_read_u(struct file *file, char __user *ubuf, size_t count,
 			.ppos	= ppos
 		};
 
+		if (unlikely(!count))
+			return 0;
+
 		/*
 		 * workaround an application bug.
 		 * generally, read(2) or write(2) may return the value shorter
-		 * then requested. But many applications don't support it,
+		 * than requested. But many applications don't support it,
 		 * for example bash.
 		 */
+		err = -ENOMEM;
 		if (args.count > PAGE_SIZE)
 			args.count = PAGE_SIZE;
 		args.kbuf = kmalloc(args.count, GFP_KERNEL);
@@ -338,9 +342,13 @@ ssize_t vfsub_read_u(struct file *file, char __user *ubuf, size_t count,
 			else if (unlikely(err < 0))
 				goto out_free;
 			count -= err;
+			/* do not read too much because of file i/o pointer */
+			if (unlikely(count < args.count))
+				args.count = count;
 			ubuf += err;
 			read += err;
 		} while (count);
+		smp_mb();
 		err = read;
 
 	out_free:
@@ -384,15 +392,15 @@ struct write_args {
 static void call_write_k(void *args)
 {
 	struct write_args *a = args;
+	LKTRTrace("%.*s, cnt %lu, pos %Ld\n",
+		  DLNPair(a->file->f_dentry), (unsigned long)a->count,
+		  *a->ppos);
 	*a->errp = do_vfsub_write_k(a->file, a->kbuf, a->count, a->ppos);
 }
 
 ssize_t vfsub_write_u(struct file *file, const char __user *ubuf, size_t count,
 		      loff_t *ppos, int dlgt)
 {
-	if (unlikely(!count))
-		return 0;
-
 	if (!dlgt)
 		return do_vfsub_write_u(file, ubuf, count, ppos);
 	else {
@@ -404,14 +412,16 @@ ssize_t vfsub_write_u(struct file *file, const char __user *ubuf, size_t count,
 			.ppos	= ppos
 		};
 
-		err = -ENOMEM;
+		if (unlikely(!count))
+			return 0;
 
 		/*
 		 * workaround an application bug.
 		 * generally, read(2) or write(2) may return the value shorter
-		 * then requested. But many applications don't support it,
+		 * than requested. But many applications don't support it,
 		 * for example bash.
 		 */
+		err = -ENOMEM;
 		if (args.count > PAGE_SIZE)
 			args.count = PAGE_SIZE;
 		args.kbuf = kmalloc(args.count, GFP_KERNEL);

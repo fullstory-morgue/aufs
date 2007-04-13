@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: sysaufs.c,v 1.1 2007/03/27 12:52:39 sfjro Exp $ */
+/* $Id: sysaufs.c,v 1.2 2007/04/09 02:44:47 sfjro Exp $ */
 
 #include <linux/module.h>
 #include <linux/seq_file.h>
@@ -374,7 +374,7 @@ static ssize_t sysaufs_read(struct kobject *kobj, char *buf, loff_t offset,
 	loff_t len;
 	struct dentry *d;
 
-	LKTRTrace("%d, offset %Ld, sz %u\n", index, offset, sz);
+	LKTRTrace("%d, offset %Ld, sz %lu\n", index, offset, (unsigned long)sz);
 
 	if (unlikely(!sz))
 		return 0;

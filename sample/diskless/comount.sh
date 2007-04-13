@@ -18,7 +18,7 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
-# $Id: comount.sh,v 1.3 2007/03/12 01:54:55 sfjro Exp $
+# $Id: comount.sh,v 1.4 2007/04/09 02:47:11 sfjro Exp $
 
 set -ex
 tmp=/tmp/$$
@@ -262,6 +262,7 @@ edgy()
 	cd /aufs
 	chroot . usr/sbin/useradd -s /bin/bash jro
 	chroot . passwd -d jro
+
 	cp -p /branch/edgy/lndir .
 	mkdir ./ext1
 	{
@@ -271,12 +272,27 @@ edgy()
 	echo 192.168.1.1:/ext1 /ext1 nfs ro,defaults 0 0
 	echo /dev/hda12 /home ext2 ro,defaults 0 0
 	} > ./etc/fstab
+
 	chmod a-x ./usr/bin/consolechars
 	for i in gdm cupsys hplip
 	do echo ./etc/rc2.d/*$i
 	done | xargs -r busybox chmod a-x
 	sed -e 's/getty 38400 tty1/getty -L ttyS0 115200 vt100/' \
 		./etc/event.d/tty1 > ./etc/event.d/ttyS0
+
+	# mkdir ./samba
+	# mount -t tmpfs none samba
+	# cd samba
+	# mkdir ro rw u
+	# /bin/mount -n -t aufs -o br:rw:ro none u
+	# cd ..
+	# cat <<- EOF >> ./etc/samba/smb.conf
+	# [aufs]
+	# 	comment = aufs
+	# 	path = /samba/u
+	# 	guest ok = yes
+	# 	writable = yes
+	# EOF
 }
 
 ########################################

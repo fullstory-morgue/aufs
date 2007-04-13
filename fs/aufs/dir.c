@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: dir.c,v 1.31 2007/03/27 12:51:43 sfjro Exp $ */
+/* $Id: dir.c,v 1.32 2007/04/09 02:45:00 sfjro Exp $ */
 
 #include "aufs.h"
 
@@ -266,6 +266,7 @@ static int aufs_readdir(struct file *file, void *dirent, filldir_t filldir)
 	inode = dentry->d_inode;
 	IMustLock(inode);
 
+	nfsd_lockdep_off();
 	sb = dentry->d_sb;
 	si_read_lock(sb);
 	err = au_reval_and_lock_finfo(file, reopen_dir, /*wlock*/1,
@@ -290,6 +291,7 @@ static int aufs_readdir(struct file *file, void *dirent, filldir_t filldir)
 	fi_write_unlock(file);
  out:
 	si_read_unlock(sb);
+	nfsd_lockdep_on();
 	TraceErr(err);
 	return err;
 }

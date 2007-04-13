@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: i_op_ren.c,v 1.31 2007/03/27 12:51:43 sfjro Exp $ */
+/* $Id: i_op_ren.c,v 1.33 2007/04/09 02:45:36 sfjro Exp $ */
 
 //#include <linux/fs.h>
 //#include <linux/namei.h>
@@ -298,10 +298,8 @@ static int do_rename(struct inode *src_dir, struct dentry *src_dentry,
 		set_h_dptr(dentry, a->btgt, dget(hidden_dst));
 	}
  out_whdst:
-	if (wh_dentry[DST]) {
-		dput(wh_dentry[DST]);
-		wh_dentry[DST] = NULL;
-	}
+	dput(wh_dentry[DST]);
+	wh_dentry[DST] = NULL;
  out_whsrc:
 	if (wh_dentry[SRC]) {
 		LKTRLabel(here);
@@ -332,10 +330,8 @@ static int do_rename(struct inode *src_dir, struct dentry *src_dentry,
 	if (tharg)
 		d_drop(hidden_dst);
  out_success:
-	if (wh_dentry[SRC])
-		dput(wh_dentry[SRC]);
-	if (wh_dentry[DST])
-		dput(wh_dentry[DST]);
+	dput(wh_dentry[SRC]);
+	dput(wh_dentry[DST]);
  out_tharg:
 	if (tharg) {
 		dput(hidden_dst);
@@ -415,13 +411,13 @@ int aufs_rename(struct inode *src_dir, struct dentry *src_dentry,
 
 	a.sb = src_dentry->d_sb;
 	inode = src_dentry->d_inode;
-	a.isdir = S_ISDIR(inode->i_mode);
+	a.isdir = !!S_ISDIR(inode->i_mode);
 	if (unlikely(a.isdir && dentry->d_inode
 		     && !S_ISDIR(dentry->d_inode->i_mode)))
 		return -ENOTDIR;
 
 	aufs_read_and_write_lock2(dentry, src_dentry, a.isdir);
-	a.dlgt = need_dlgt(a.sb);
+	a.dlgt = !!need_dlgt(a.sb);
 	a.parent[SRC] = a.parent[DST] = dentry->d_parent;
 	a.issamedir = (src_dir == dir);
 	if (a.issamedir)
@@ -458,10 +454,11 @@ int aufs_rename(struct inode *src_dir, struct dentry *src_dentry,
 	}
 
 	/* prepare the writable parent dir on the same branch */
-	a.whsrc = err = wr_dir_need_wh(src_dentry, a.isdir, &a.btgt,
-				       a.issamedir ? NULL : a.parent[DST]);
+	err = wr_dir_need_wh(src_dentry, a.isdir, &a.btgt,
+			     a.issamedir ? NULL : a.parent[DST]);
 	if (unlikely(err < 0))
 		goto out_children;
+	a.whsrc = !!err;
 	a.whdst = (a.bstart[DST] == a.btgt);
 	if (!a.whdst) {
 		err = cpup_dirs(dentry, a.btgt,

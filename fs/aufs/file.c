@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: file.c,v 1.36 2007/03/27 12:51:43 sfjro Exp $ */
+/* $Id: file.c,v 1.37 2007/04/09 02:45:10 sfjro Exp $ */
 
 //#include <linux/fsnotify.h>
 #include <linux/pagemap.h>
@@ -680,12 +680,12 @@ static int aufs_commit_write(struct file *file, struct page *page,
 {BUG();return 0;}
 static int aufs_writepage(struct page *page, struct writeback_control *wbc)
 {BUG();return 0;}
-#if LINUX_VERSION_CODE == KERNEL_VERSION(2,6,15)
-static int aufs_sync_page(struct page *page)
-{BUG(); return 0;}
-#else
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,17)
 static void aufs_sync_page(struct page *page)
 {BUG();}
+#else
+static int aufs_sync_page(struct page *page)
+{BUG(); return 0;}
 #endif
 
 #if 0 // comment
@@ -701,12 +701,12 @@ static sector_t aufs_bmap(struct address_space *mapping, sector_t block)
 
 static int aufs_set_page_dirty(struct page *page)
 {BUG();return 0;}
-#if LINUX_VERSION_CODE == KERNEL_VERSION(2,6,15)
-static int aufs_invalidatepage (struct page *page, unsigned long offset)
-{BUG(); return 0;}
-#else
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,17)
 static void aufs_invalidatepage (struct page *page, unsigned long offset)
 {BUG();}
+#else
+static int aufs_invalidatepage (struct page *page, unsigned long offset)
+{BUG(); return 0;}
 #endif
 static int aufs_releasepage (struct page *page, gfp_t gfp)
 {BUG();return 0;}

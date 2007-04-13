@@ -16,6 +16,33 @@ See Unionfs Version 1.x series for the basic features.
 
 .\" ----------------------------------------------------------------------
 .SH MOUNT OPTIONS
+At mount-time, the order of interpreting options is,
+.RS
+.IP \(bu 4
+simple flags, except xino/noxino, udba=inotify and dlgt
+.IP \(bu 4
+branches
+.IP \(bu 4
+xino/noxino
+.IP \(bu 4
+udba=inotify
+.IP \(bu 4
+dlgt
+.RE
+
+At remount-time,
+the options are interpreted in the given order,
+e.g. left to right, except dlgt. The 'dlgt' option is
+disabled in interpreting.
+.RS
+.IP \(bu 4
+create or remove
+whiteout-base(\*[AUFS_WH_PFX]\*[AUFS_WH_BASENAME]) and
+whplink-dir(\*[AUFS_WH_PFX]\*[AUFS_WH_PLINKDIR]) if neccessary
+.IP \(bu 4
+re-enable dlgt if neccessary
+.RE
+.
 .TP
 .B br:BRANCH[:BRANCH ...] (dirs=BRANCH[:BRANCH ...])
 Adds new branches.
@@ -25,6 +52,9 @@ Adds new branches.
 .B [ add | ins ]:index:BRANCH
 Adds a new branch.
 The index begins with 0.
+Aufs creates
+whiteout-base(\*[AUFS_WH_PFX]\*[AUFS_WH_BASENAME]) and
+whplink-dir(\*[AUFS_WH_PFX]\*[AUFS_WH_PLINKDIR]) if neccessary.
 
 If there is the same named file on the lower branch (larger index),
 aufs will hide the lower file.
@@ -45,6 +75,11 @@ adding, you need to restart your process or open/mmap the file again.
 .TP
 .B del:dir
 Removes a branch.
+Aufs doesn't remove
+whiteout-base(\*[AUFS_WH_PFX]\*[AUFS_WH_BASENAME]) and
+whplink-dir(\*[AUFS_WH_PFX]\*[AUFS_WH_PLINKDIR]) automatically.
+For example, when you add a RO branch which was unified as RW, you
+will see whiteout-base or whplink-dir on the added RO branch.
 
 If a process is referencing the file/directory on the deleting branch
 (by open, mmap, current working directory, etc.), aufs will return an
@@ -53,6 +88,9 @@ error EBUSY.
 .TP
 .B mod:BRANCH
 Modifies the permission flags of the branch.
+Aufs creates or removes
+whiteout-base(\*[AUFS_WH_PFX]\*[AUFS_WH_BASENAME]) and/or
+whplink-dir(\*[AUFS_WH_PFX]\*[AUFS_WH_PLINKDIR]) if neccessary.
 
 If the branch permission is been changing 'rw' to 'ro, and a process
 is mapping a file by mmap(2)
@@ -164,8 +202,13 @@ since 'diropq' affects the same named directory on the added branch.
 .
 .TP
 .B warn_perm nowarn_perm
-Enables or disables the warning about uid/gid/permission at adding a
-branch. The default is warn_perm (cf. DIAGNOSTICS).
+Adding a branch, aufs will issue a warning about uid/gid/permission of
+the adding branch directory,
+when they differ from the existing branch's. This difference may or
+may not impose a security risk.
+If you are sure that there is no problem and want to stop the warning,
+use 'nowarn_perm' option.
+The default is 'warn_perm' (cf. DIAGNOSTICS).
 .\" .
 .\" .TP
 .\" .B coo=none | leaf | all
@@ -182,20 +225,22 @@ branch. The default is warn_perm (cf. DIAGNOSTICS).
 .\" .
 .\" .TP
 .\" .B dlgt nodlgt
-.\" When you define CONFIG_SECURITY and use any type of Linux Security Module
-.\" (LSM), for example SUSE AppArmor, you may or may not meet some errors or
-.\" warnings from your security module. Because aufs access its branches
-.\" internally, your security module may detect, report, or prohibit it.
-.\" The behaviour is highly depending upon your security module and its
-.\" configuration.
-.\" 
 .\" If you don't want your application to access branches though aufs or
 .\" to be traced strictly by task I/O accounting, you can
 .\" use the kernel threads in aufs. If you enable CONFIG_AUFS_DLGT and
 .\" specify 'dlgt' mount option, then
 .\" aufs delegates its internal
-.\" access to the branches to the kernel threads, and your LSM will see the
-.\" aufs kernel threads access to the branch instead of your
+.\" access to the branches to the kernel threads.
+.\" 
+.\" When you define CONFIG_SECURITY and use any type of Linux Security Module
+.\" (LSM), for example SUSE AppArmor, you may meet some errors or
+.\" warnings from your security module. Because aufs access its branches
+.\" internally, your security module may detect, report, or prohibit it.
+.\" The behaviour is highly depending upon your security module and its
+.\" configuration.
+.\" In this case, you can use 'dlgt' mount option, too.
+.\" Your LSM will see the
+.\" aufs kernel threads access to the branch, instead of your
 .\" application.
 .\" 
 .\" The delegation may damage the performance since it includes
@@ -232,10 +277,10 @@ If you enable CONFIG_SYSFS, you can check this value through
 
 So how many threads is enough? You can check it by
 <sysfs>/fs/aufs/stat. It shows the maximum number of the enqueued work
-at a time per a thread. Usually they are all 1 or 0. If your workload
-is heavy
+at a time per a thread. Usually they are all small numbers or
+0. If your workload is heavy
 and you feel the response is low, then check these values. If there
-are no zero and any of them is larger than one, you should set 'nwkq'
+are no zero and any of them is larger than 2 or 3, you should set 'nwkq'
 module parameter greater then the default value.
 But the reason of the bad response is in your branch filesystem, to
 increase the number of aufs thread will not help you.
@@ -263,7 +308,13 @@ ignored.
 
 .\" ----------------------------------------------------------------------
 .SH Branch Syntax
-dir_path[ =rw | =ro | =rowh ]
+dir_path[ =permission [ + attribute ] ]
+.RS
+.br
+permission := rw | ro
+.br
+attribute := wh | nolwh
+.RE
 
 dir_path is a directory path.
 The keyword after 'dir_path=' is a
@@ -276,22 +327,45 @@ saying it is overlapped or nested.
 
 The maximum number of branches is configurable at compile time.
 The current value is \*[AUFS_BRANCH_MAX].
+
+When an unknown permission or attribute is given, aufs sets ro to that
+branch silently.
+
+.SS Permission
 .
 .TP
 .B rw
 Readable and writable branch. Set as default for the first branch.
 If the branch filesystem is mounted as readonly, you cannot set it 'rw'.
+.\" A filesystem which doesn't support link(2) and i_op->setattr(), for
+.\" example FAT, will not be used as the writable branch.
 .
 .TP
 .B ro
 Readonly branch and it has no whiteouts on it.
 Set as default for all branches except the first one. Aufs never issue
-write operation, and lookup operation for whiteout to this branch.
+both of write operation and lookup operation for whiteout to this branch.
+
+.SS Attribute
 .
 .TP
-.B rowh
+.B wh
 Readonly branch and it has/might have whiteouts on it.
 Aufs never issue write operation to this branch, but lookup for whiteout.
+Use this as '<branch_dir>=ro+wh'.
+.
+.TP
+.B nolwh
+Usually, aufs creates a whiteout as a hardlink on a writable
+branch. This attributes prohibits aufs to create the hardlinked
+whiteout, including the source file of all hardlinked whiteout
+\*[AUFS_WH_PFX]\*[AUFS_WH_BASENAME].
+If you don't like a hardlink, or your writable branch doesn't support
+link(2), then use this attribute.
+But I am afraid a filesystem which doesn't support link(2) natively
+will fail in other place such as copy-up.
+Use this as '<branch_dir>=rw+nolwh'.
+Also you may want to try 'noplink' mount option, while it is not recommended.
 
 .\" ----------------------------------------------------------------------
 .SH External Inode Number Table (xino)
@@ -311,7 +385,7 @@ to put xino files on other than flash memory by specifing 'xino='
 monut option.
 The
 maximum file size will be 'max inode number on the branch x size of an
-inode number'. For example, on a 32bit system,
+inode number'. For example,
 
 .nf
 $ df -i /branch_fs
@@ -319,7 +393,7 @@ $ df -i /branch_fs
 .fi
 
 and /branch_fs is an branch of the aufs, the maximum xino file size for
-/branch_fs will be 2,599,968 x 4 bytes = about 10 MB. But it might not be
+/branch_fs will be 2,599,968 x 8 bytes = about 20 MB. But it might not be
 allocated all of disk blocks.
 
 The xino files are always hidden, i.e. removed. So you cannot do 'ls -l
@@ -385,20 +459,24 @@ using 'ro' or 'noplink' mount option,
 deleting a branch from aufs,
 adding a branch into aufs,
 or changing your writable branch to readonly.
+
 This script will reproduces all real hardlinks on a writable branch by linking
 them, and removes pseudo-link info in memory and temporary link on the
 writable branch.
 Since this script access your branches directly, you cannot hide them by
 'mount --bind /tmp /branch' or something.
+
 If you are willing to rebuild your aufs with the same branches later, you
 should use auplink script before you umount your aufs.
 If you installed both of /sbin/mount.aufs and /sbin/umount.aufs, and your
 mount(8) and umount(8) support them, and /etc/default/auplink is configured,
 'auplink' script will be executed automatically and flush pseudo-links.
-/etc/default/auplink is a simple shell script which does nothing but defines
+
+The /etc/default/auplink is a simple shell script which does nothing but defines
 $FLUSH. If your aufs mount point is set in $FLUSH, 'auplink' flushes
 the pseudo-links on that mount point.
 If $FLUSH is set to "ALL", 'auplink' will be executed for every aufs.
+
 The 'auplink' script uses 'aulchown' binary, you need to install it too.
 The 'auplink' script executes 'find' and 'mount -o remount', they may take a
 long time and impact the later system performance.
@@ -434,6 +512,7 @@ are 0700, and a file who is 0644 under the 0700 directory. Usually,
 all files under the 0700 directory are private and no one else can see
 the file. But when the directory is 0711 and someone else knows the 0644
 filename, he can read the file.
+
 Basically, aufs pseudo-link feature creates a temporary link under the
 directory whose owner is root and the permission flags are 0700.
 But when the writable branch is NFS, aufs sets 0711 to the directory.
@@ -447,6 +526,7 @@ In this case, the 0644 file will be read unexpectedly.
 I am afraid that leaving the temporary pseudo-links can be a security hole.
 It make sense to execute 'auplink /your/aufs/root flush'
 periodically, when your writable branch is NFS.
+
 When your writable branch is not NFS, or all users are careful enough to set 0600
 to their private files, you don't have to worry about this issue.
 
@@ -864,13 +944,7 @@ behaviour of fsync(2) on ext2, aufs decided to return success.
 
 .\" ----------------------------------------------------------------------
 .SH EXAMPLES
-The mount options are interpreted from left to right except xino option. The
-xino option is always interpreted first. When you specify multiple xino options
-in a single remount operation, aufs interpret the last one (rightmost) only.
-The udba=inotify option is disabled during interpreting options, i.e. mount
-and remount time. Interpreting all options, the udba=inotify option is
-handled.
-
+The mount options are interpreted from left to right at remount-time.
 These examples
 shows how the options are handled. (assuming /sbin/mount.aufs was
 installed)
@@ -933,7 +1007,8 @@ sample/ in detail.
 When you add an branch to your union, aufs may warn you about the
 privilege or security of the branch, which is the permission bits,
 owner and group of the top directory of the branch.
-If your upper writable branch has a world writable top directory,
+For example, when your upper writable branch has a world writable top
+directory,
 a malicious user can create any files on the writable branch directly,
 like copyup and modify manually. I am afraid it can be a security
 issue.

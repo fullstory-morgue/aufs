@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: i_op_del.c,v 1.28 2007/03/27 12:51:43 sfjro Exp $ */
+/* $Id: i_op_del.c,v 1.30 2007/04/09 02:45:36 sfjro Exp $ */
 
 #include "aufs.h"
 
@@ -270,8 +270,7 @@ int aufs_unlink(struct inode *dir, struct dentry *dentry)
 
  out_unlock:
 	hdir_unlock(hidden_dir, dir, bindex);
-	if (wh_dentry)
-		dput(wh_dentry);
+	dput(wh_dentry);
 	dput(hidden_dentry);
  out:
 	di_write_unlock(parent);
@@ -346,6 +345,7 @@ int aufs_rmdir(struct inode *dir, struct dentry *dentry)
 	}
 
 	if (!err) {
+		au_reset_hinotify(inode, /*flags*/0);
 		inode->i_nlink = 0;
 		set_dbdiropq(dentry, -1);
 		epilog(dir, dentry, bindex);
@@ -371,8 +371,7 @@ int aufs_rmdir(struct inode *dir, struct dentry *dentry)
 
  out_unlock:
 	hdir_unlock(hidden_dir, dir, bindex);
-	if (wh_dentry)
-		dput(wh_dentry);
+	dput(wh_dentry);
 	dput(hidden_dentry);
  out_arg:
 	free_nhash(&whlist);

@@ -1,9 +1,50 @@
-aufs (0.0~20070330-2) UNRELEASED; urgency=low
+aufs (0.0~20070414-1) unstable; urgency=low
 
-  * NOT RELEASED YET
+  * New upstream release:
+    - introduce new branch attribute "nolwh."
+    - refine parsing options at mount/remount time, reported by Sandino
+      Flores Moreno.
+      + remove whiteout-base and whplink-dir in nopllink and br_mod(),
+        but br_del().
+      + increment sbinfo generation in a new function
+        aufs_remount_fs().
+      + support multiple xino/noxino options in another way.
+      + force "ro" when unknown branch permission is specified.
+      + at mount-time, interpret options in this order.
+              * simple flags, except xino/noxino, udba=inotify and dlgt.
+              * branches.
+              * xino/noxino.
+              * udba=inotify.
+              * dlgt.
+      + at remount-time,
+              * interpret options in the given order left to right,
+                except dlgt which is disabled in interpreting.
+              * create whiteout-base and whplink-dir if neccessary.
+              * dlgt if neccessary.
+      + new functions, clean_wh(), clean_plink(), test_linkable(),
+        plink_dir().
+    - support 64bit environtment, reported by Vasily Tarasov.
+    - introduce a sample for kprobe.
+    - bugfix: do not traverse the sub-mounts under aufs at refreshing
+      cached dirs after remount.
+    - bugfix: simultaneous read in 'dlgt' mode, reported and fixed by
+      Ulrich Holeschak.
+    - bugfix: LINUX_VERSION_CODE for linux-2.6.16.
+    - still testing inotify.
+    - support lockdep in nfsd, still testing.
+    - minor optimization for dput().
+    - new test functions br_writable(), br_whable() and br_linkable_wh(),
+      replacing au_is_whable().
+    - do write_lock() in reinit_br_wh().
+    - refine updating /sys/fs/aufs/stat.
+    - wkq_nowait() calls schedule_work().
+    - bugfix: forgot dput in a error case.
+    - introduce wkq_nowait().
+    - refine udba=inotify, still testing.
+    - extract some functions from sbinfo.c, create a new file plink.c.
   * add myself to uploaders.
 
- -- Stefan Lippers-Hollmann <s.l-h@gmx.de>  Fri, 30 Mar 2007 21:51:09 +0200
+ -- Stefan Lippers-Hollmann <s.l-h@gmx.de>  Sat, 14 Apr 2007 01:50:13 +0200
 
 aufs (0.0~20070330-1) unstable; urgency=low
 

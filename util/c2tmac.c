@@ -17,6 +17,7 @@ main(int argc, char *argv[])
 	pint(AUFS_NWKQ_DEF);
 	pstr(AUFS_WH_DIROPQ);
 	pstr(AUFS_WH_BASENAME);
+	pstr(AUFS_WH_PLINKDIR);
 	pint(AUFS_BRANCH_MAX);
 	return 0;
 }

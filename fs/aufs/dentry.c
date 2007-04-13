@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: dentry.c,v 1.35 2007/03/27 12:48:50 sfjro Exp $ */
+/* $Id: dentry.c,v 1.36 2007/04/02 01:13:12 sfjro Exp $ */
 
 //#include <linux/fs.h>
 //#include <linux/namei.h>
@@ -757,8 +757,11 @@ static int aufs_d_revalidate(struct dentry *dentry, struct nameidata *nd)
 		Dbg("UDBA %.*s\n", DLNPair(dentry));
 #endif
 		/* root directory was handled in aufs_inotify() */
-		DEBUG_ON(IS_ROOT(dentry));
-		goto out;
+		if (unlikely(IS_ROOT(dentry))) {
+			static DECLARE_WAIT_QUEUE_HEAD(wq);
+			wait_event(wq, !au_direval_test(dentry));
+		} else
+			goto out;
 	}
 
 	sb = dentry->d_sb;

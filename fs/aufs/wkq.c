@@ -16,9 +16,8 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: wkq.c,v 1.8 2007/03/27 12:50:54 sfjro Exp $ */
+/* $Id: wkq.c,v 1.10 2007/04/09 02:47:56 sfjro Exp $ */
 
-#include <linux/kthread.h>
 #include "aufs.h"
 
 struct au_wkq *au_wkq;
@@ -38,7 +37,8 @@ struct au_cred {
 struct au_wkinfo {
 	struct work_struct wk;
 
-	int dlgt; // can be a bit
+	unsigned int wait:1;
+	unsigned int dlgt:1;
 	struct au_cred cred;
 
 	au_wkq_func_t func;
@@ -79,15 +79,24 @@ static void cred_switch(struct au_cred *old, struct au_cred *new)
 
 /* ---------------------------------------------------------------------- */
 
+static void update_busy(struct au_wkq *wkq, struct au_wkinfo *wkinfo)
+{
+#ifdef CONFIG_AUFS_SYSAUFS
+	unsigned int new, old;
+
+	do {
+		new = atomic_read(wkinfo->busyp);
+		old = wkq->max_busy;
+		if (new <= old)
+			break;
+	} while (cmpxchg(&wkq->max_busy, old, new) == old);
+#endif
+}
+
 static int enqueue(struct au_wkq *wkq, struct au_wkinfo *wkinfo)
 {
-	unsigned int v, cur;
-
 	wkinfo->busyp = &wkq->busy;
-	v = atomic_read(wkinfo->busyp);
-	cur = wkq->max_busy;
-	if (unlikely(cur < v))
-		(void)cmpxchg(&wkq->max_busy, cur, v);
+	update_busy(wkq, wkinfo);
 	return !queue_work(wkq->q, &wkinfo->wk);
 }
 
@@ -139,15 +148,20 @@ static AuWkqFunc(wkq_func, wk)
 #else
 	wkinfo->func(wkinfo->args);
 #endif
-	atomic_dec(wkinfo->busyp);
-	complete(wkinfo->comp);
+	//atomic_dec(wkinfo->busyp);
+	if (wkinfo->wait) {
+		atomic_dec(wkinfo->busyp);
+		complete(wkinfo->comp);
+	} else
+		kfree(wkinfo);
 }
 
 void wkq_wait(au_wkq_func_t func, void *args, int dlgt)
 {
 	DECLARE_COMPLETION_ONSTACK(comp);
 	struct au_wkinfo wkinfo = {
-		.dlgt	= dlgt,
+		.wait	= 1,
+		.dlgt	= !!dlgt,
 		.func	= func,
 		.args	= args,
 		.comp	= &comp
@@ -163,6 +177,33 @@ void wkq_wait(au_wkq_func_t func, void *args, int dlgt)
 #endif
 	do_wkq(&wkinfo);
 	wait_for_completion(wkinfo.comp);
+}
+
+void wkq_nowait(au_wkq_func_t func, void *args, int dlgt)
+{
+	struct au_wkinfo *wkinfo;
+	static DECLARE_WAIT_QUEUE_HEAD(wq);
+
+	LKTRTrace("dlgt %d\n", dlgt);
+
+	/*
+	 * wkq_func() must free this wkinfo.
+	 * it highly depends upon the implementation of workqueue.
+	 */
+	wait_event(wq, (wkinfo = kmalloc(sizeof(*wkinfo), GFP_KERNEL)));
+	wkinfo->wait = 0;
+	wkinfo->dlgt = !!dlgt;
+	wkinfo->func = func;
+	wkinfo->args = args;
+	wkinfo->comp = NULL;
+
+	AuInitWkq(&wkinfo->wk, wkq_func);
+#ifdef CONFIG_AUFS_DLGT
+	if (dlgt)
+		cred_store(&wkinfo->cred);
+#endif
+	schedule_work(&wkinfo->wk);
+	//do_wkq(wkinfo);
 }
 
 void au_fin_wkq(void)
@@ -201,6 +242,19 @@ int __init au_init_wkq(void)
 		au_fin_wkq();
 		break;
 	}
+
+#if 0
+	if (!err) {
+		static DECLARE_WAIT_QUEUE_HEAD(wq);
+		static void f(void *args) {
+			Dbg("sleep 3\n");
+			//wait_event_timeout(wq, 0, 3 * HZ);
+		}
+		int i;
+		for (i = 0; i < 10; i++)
+			wkq_nowait(f, NULL, 0);
+	}
+#endif
 
  out:
 	TraceErr(err);

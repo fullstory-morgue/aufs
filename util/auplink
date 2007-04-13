@@ -16,7 +16,7 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
-# $Id: auplink,v 1.4 2007/03/05 02:21:41 sfjro Exp $
+# $Id: auplink,v 1.5 2007/04/09 02:48:18 sfjro Exp $
 
 #set -x
 tmp=/tmp/$$
@@ -100,7 +100,7 @@ while read wbr
 do
 	d=`echo $wbr/.wh..wh.plink`
 	# -printf '%n %p\n'
-	Find "$d" -maxdepth 1 ! -type d -printf '%n\t%p\n'
+	test -d "$d" && Find "$d" -maxdepth 1 ! -type d -printf '%n\t%p\n'
 done |
 while read nlink pname
 do

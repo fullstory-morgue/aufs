@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: file.h,v 1.21 2007/03/27 12:46:34 sfjro Exp $ */
+/* $Id: file.h,v 1.22 2007/04/09 02:44:47 sfjro Exp $ */
 
 #ifndef __AUFS_FILE_H__
 #define __AUFS_FILE_H__
@@ -104,7 +104,7 @@ static inline int au_figen(struct file *f)
 
 static inline int au_is_mmapped(struct file *f)
 {
-	return (int)ftofi(f)->fi_h_vm_ops;
+	return !!(ftofi(f)->fi_h_vm_ops);
 }
 
 /* ---------------------------------------------------------------------- */
