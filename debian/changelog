@@ -1,3 +1,9 @@
+aufs (0.0~20070414-2) UNRELEASED; urgency=low
+
+  * NOT RELEASED YET
+
+ -- Stefan Lippers-Hollmann <s.l-h@gmx.de>  Sat, 14 Apr 2007 01:52:32 +0200
+
 aufs (0.0~20070414-1) unstable; urgency=low
 
   * New upstream release:
