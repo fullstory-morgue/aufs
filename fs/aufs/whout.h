@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: whout.h,v 1.6 2007/03/27 12:45:47 sfjro Exp $ */
+/* $Id: whout.h,v 1.7 2007/04/09 02:46:28 sfjro Exp $ */
 
 #ifndef __AUFS_WHOUT_H__
 #define __AUFS_WHOUT_H__
@@ -42,7 +42,7 @@ int au_unlink_wh_dentry(struct inode *h_dir, struct dentry *wh_dentry,
 
 struct aufs_branch;
 int init_wh(struct dentry *h_parent, struct aufs_branch *br,
-	    struct vfsmount *nfsmnt);
+	    struct vfsmount *nfsmnt, struct super_block *sb);
 
 struct dentry *sio_diropq(struct dentry *dentry, aufs_bindex_t bindex,
 			  int do_create, int dlgt);

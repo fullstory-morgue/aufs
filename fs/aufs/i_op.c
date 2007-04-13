@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: i_op.c,v 1.28 2007/03/27 12:49:32 sfjro Exp $ */
+/* $Id: i_op.c,v 1.29 2007/04/09 02:45:23 sfjro Exp $ */
 
 //#include <linux/fs.h>
 //#include <linux/namei.h>
@@ -55,7 +55,7 @@ static int hidden_permission(struct inode *hidden_inode, int mask,
 
 	/* skip hidden fs test in the case of write to ro branch */
 	submask = mask & ~MAY_APPEND;
-	if (unlikely((write_mask && brperm != AuBrPerm_RW)
+	if (unlikely((write_mask && !br_writable(brperm))
 		     || !hidden_inode->i_op
 		     || !hidden_inode->i_op->permission)) {
 		//LKTRLabel(generic_permission);

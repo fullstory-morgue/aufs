@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: inode.c,v 1.17 2007/03/27 12:51:43 sfjro Exp $ */
+/* $Id: inode.c,v 1.18 2007/04/02 01:13:12 sfjro Exp $ */
 
 #include "aufs.h"
 
@@ -248,11 +248,12 @@ struct inode *au_new_inode(struct dentry *dentry)
 		unlock_new_inode(inode);
 #if 1 // test
 	} else if (unlikely(bindex >= 0
-			    && au_flag_test(sb, AuFlag_UDBA_INOTIFY))) {
+			    /* && au_flag_test(sb, AuFlag_UDBA_INOTIFY) */)) {
 		int found = 0;
 		aufs_bindex_t bend = ibend(inode);
 		for (; !found && bindex <= bend; bindex++)
 			found = (hidden_inode == au_h_iptr_i(inode, bindex));
+
 		if (unlikely(!found)) {
 			ii_write_unlock(inode);
 			iput(inode);
@@ -260,6 +261,35 @@ struct inode *au_new_inode(struct dentry *dentry)
 			if (unlikely(err))
 				goto out_iput;
 			goto new_ino;
+		}
+
+		if (S_ISDIR(inode->i_mode)) {
+			unsigned int flags = au_hi_flags(inode, /*isdir*/1);
+			bindex = dbstart(dentry);
+			bend = dbend(dentry);
+			for (; bindex <= bend; bindex++) {
+				hidden_dentry = au_h_dptr_i(dentry, bindex);
+				if (hidden_dentry && hidden_dentry->d_inode)
+					break;
+			}
+			if (bindex < ibstart(inode))
+				set_ibstart(inode, bindex);
+			for (; bend >= bindex; bend--) {
+				hidden_dentry = au_h_dptr_i(dentry, bend);
+				if (hidden_dentry && hidden_dentry->d_inode)
+					break;
+			}
+			if (ibend(inode) < bend)
+				set_ibend(inode, bend);
+
+			for (; bindex <= bend; bindex++) {
+				hidden_dentry = au_h_dptr_i(dentry, bindex);
+				if (hidden_dentry
+				    && hidden_dentry->d_inode
+				    && !au_h_iptr_i(inode, bindex))
+				set_h_iptr(inode, bindex,
+					   igrab(hidden_dentry->d_inode), flags);
+			}
 		}
 #endif
 	}

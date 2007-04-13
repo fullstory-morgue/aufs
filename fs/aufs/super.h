@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: super.h,v 1.38 2007/03/27 12:48:03 sfjro Exp $ */
+/* $Id: super.h,v 1.40 2007/04/09 02:45:00 sfjro Exp $ */
 
 #ifndef __AUFS_SUPER_H__
 #define __AUFS_SUPER_H__
@@ -100,9 +100,9 @@ struct aufs_sbinfo {
 #define AuFlag_DLGT		(1 << 11)
 
 #define AuMask_UDBA		(AuFlag_UDBA_NONE | AuFlag_UDBA_REVAL \
-					| AuFlag_UDBA_INOTIFY)
+				 | AuFlag_UDBA_INOTIFY)
 #define AuMask_COO		(AuFlag_COO_NONE | AuFlag_COO_LEAF \
-					| AuFlag_COO_ALL)
+				 | AuFlag_COO_ALL)
 
 #ifdef CONFIG_AUFS_COMPAT
 #define AuDefFlag_DIROPQ	AuFlag_ALWAYS_DIROPQ
@@ -111,7 +111,7 @@ struct aufs_sbinfo {
 #endif
 
 #define AuDefFlags_COMM		(AuFlag_XINO | AuFlag_UDBA_REVAL | AuFlag_WARN_PERM \
-					| AuFlag_COO_NONE | AuDefFlag_DIROPQ)
+				 | AuFlag_COO_NONE | AuDefFlag_DIROPQ)
 #if LINUX_VERSION_CODE != KERNEL_VERSION(2,6,15)
 #define AuDefFlags		(AuDefFlags_COMM | AuFlag_PLINK)
 #else
@@ -159,22 +159,6 @@ void aufs_write_unlock(struct dentry *dentry);
 void aufs_read_and_write_lock2(struct dentry *d1, struct dentry *d2, int isdir);
 void aufs_read_and_write_unlock2(struct dentry *d1, struct dentry *d2);
 
-#ifdef CONFIG_AUFS_DEBUG
-void au_list_plink(struct super_block *sb);
-#else
-static inline void au_list_plink(struct super_block *sb)
-{
-	/* nothing */
-}
-#endif
-int au_is_plinked(struct super_block *sb, struct inode *inode);
-struct dentry *lkup_plink(struct super_block *sb, aufs_bindex_t bindex,
-			  struct inode *inode);
-void append_plink(struct super_block *sb, struct inode *inode,
-		  struct dentry *h_dentry, aufs_bindex_t bindex);
-void au_put_plink(struct super_block *sb);
-void half_refresh_plink(struct super_block *sb, aufs_bindex_t br_id);
-
 aufs_bindex_t new_br_id(struct super_block *sb);
 
 /* ---------------------------------------------------------------------- */
@@ -203,15 +187,30 @@ static inline int au_is_remote(struct super_block *sb)
 	return au_is_nfs(sb);
 }
 
+#ifdef CONFIG_AUFS_EXPORT
 static inline void init_export_op(struct super_block *sb)
 {
-#ifdef CONFIG_AUFS_EXPORT
 	extern struct export_operations aufs_export_op;
 	sb->s_export_op = &aufs_export_op;
-#else
-	/* nothing */
-#endif
 }
+static inline void nfsd_lockdep_off(void)
+{
+	if (!strcmp(current->comm, "nfsd"))
+		lockdep_off();
+}
+static inline void nfsd_lockdep_on(void)
+{
+	if (!strcmp(current->comm, "nfsd"))
+		lockdep_on();
+}
+#else
+static inline void init_export_op(struct super_block *sb)
+{
+	/* nothing */
+}
+#define nfsd_lockdep_off()	/* */
+#define nfsd_lockdep_on()	/* */
+#endif
 
 static inline void init_lvma(struct aufs_sbinfo *sbinfo)
 {

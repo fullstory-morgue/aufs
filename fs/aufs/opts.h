@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: opts.h,v 1.10 2007/03/27 12:47:36 sfjro Exp $ */
+/* $Id: opts.h,v 1.11 2007/04/09 02:46:28 sfjro Exp $ */
 
 #ifndef __AUFS_OPTS_H__
 #define __AUFS_OPTS_H__
@@ -53,6 +53,7 @@ struct opt_xino {
 struct opt {
 	int type;
 	union {
+		struct opt_xino	xino;
 		struct opt_add	add;
 		struct opt_del	del;
 		struct opt_mod	mod;
@@ -66,20 +67,21 @@ struct opt {
 };
 
 struct opts {
-	struct opt_xino	xino;
 	struct opt	*opt;
 	int		max_opt;
 };
 
 /* ---------------------------------------------------------------------- */
 
-int br_perm_str(char *p, int len, int perm);
+int br_perm_str(char *p, int len, int brperm);
 char *udba_str(int udba);
+void udba_set(struct super_block *sb, unsigned int flg);
 //char *coo_str(int coo);
 void au_free_opts(struct opts *opts);
-int au_parse_opts(struct super_block *sb, char *str, struct opts *opts,
-		  int remount);
-int au_do_opts(struct super_block *sb, struct opts *opts, int remount);
+int au_parse_opts(struct super_block *sb, char *str, struct opts *opts);
+int au_do_opts_mount(struct super_block *sb, struct opts *opts);
+int au_do_opts_remount(struct super_block *sb, struct opts *opts,
+		       int *do_refresh, unsigned int *given);
 
 #endif /* __KERNEL__ */
 #endif /* __AUFS_OPTS_H__ */

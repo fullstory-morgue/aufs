@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: xino.c,v 1.22 2007/03/27 12:51:44 sfjro Exp $ */
+/* $Id: xino.c,v 1.23 2007/04/09 02:48:07 sfjro Exp $ */
 
 //#include <linux/fs.h>
 #include <linux/fsnotify.h>
@@ -49,14 +49,14 @@ static writef_t find_writef(struct file *hidden_file)
 	return ERR_PTR(-ENOSYS);
 }
 
-static ssize_t fread(readf_t func, struct file *file, void *buf, size_t size,
-		     loff_t *pos)
+static ssize_t xino_fread(readf_t func, struct file *file, void *buf,
+			  size_t size, loff_t *pos)
 {
 	ssize_t err;
 	mm_segment_t oldfs;
 
-	LKTRTrace("%.*s, sz %d, *pos %Ld\n",
-		  DLNPair(file->f_dentry), size, *pos);
+	LKTRTrace("%.*s, sz %lu, *pos %Ld\n",
+		  DLNPair(file->f_dentry), (unsigned long)size, *pos);
 
 	oldfs = get_fs();
 	set_fs(KERNEL_DS);
@@ -74,8 +74,8 @@ static ssize_t fread(readf_t func, struct file *file, void *buf, size_t size,
 	return err;
 }
 
-static ssize_t do_fwrite(writef_t func, struct file *file, void *buf,
-			 size_t size, loff_t *pos)
+static ssize_t do_xino_fwrite(writef_t func, struct file *file, void *buf,
+			      size_t size, loff_t *pos)
 {
 	ssize_t err;
 	mm_segment_t oldfs;
@@ -98,7 +98,7 @@ static ssize_t do_fwrite(writef_t func, struct file *file, void *buf,
 	return err;
 }
 
-struct do_fwrite_args {
+struct do_xino_fwrite_args {
 	ssize_t *errp;
 	writef_t func;
 	struct file *file;
@@ -107,19 +107,19 @@ struct do_fwrite_args {
 	loff_t *pos;
 };
 
-static void call_do_fwrite(void *args)
+static void call_do_xino_fwrite(void *args)
 {
-	struct do_fwrite_args *a = args;
-	*a->errp = do_fwrite(a->func, a->file, a->buf, a->size, a->pos);
+	struct do_xino_fwrite_args *a = args;
+	*a->errp = do_xino_fwrite(a->func, a->file, a->buf, a->size, a->pos);
 }
 
-static ssize_t fwrite(writef_t func, struct file *file, void *buf, size_t size,
-		      loff_t *pos)
+static ssize_t xino_fwrite(writef_t func, struct file *file, void *buf,
+			   size_t size, loff_t *pos)
 {
 	ssize_t err;
 
-	LKTRTrace("%.*s, sz %d, *pos %Ld\n",
-		  DLNPair(file->f_dentry), size, *pos);
+	LKTRTrace("%.*s, sz %lu, *pos %Ld\n",
+		  DLNPair(file->f_dentry), (unsigned long)size, *pos);
 
 	// signal block and no wkq?
 	/*
@@ -127,7 +127,7 @@ static ssize_t fwrite(writef_t func, struct file *file, void *buf, size_t size,
 	 * users should care about quota and real 'filesystem full.'
 	 */
 	if (!au_is_kthread(current)) {
-		struct do_fwrite_args args = {
+		struct do_xino_fwrite_args args = {
 			.errp	= &err,
 			.func	= func,
 			.file	= file,
@@ -135,9 +135,9 @@ static ssize_t fwrite(writef_t func, struct file *file, void *buf, size_t size,
 			.size	= size,
 			.pos	= pos
 		};
-		wkq_wait(call_do_fwrite, &args, /*dlgt*/0);
+		wkq_wait(call_do_xino_fwrite, &args, /*dlgt*/0);
 	} else
-		err = do_fwrite(func, file, buf, size, pos);
+		err = do_xino_fwrite(func, file, buf, size, pos);
 
 	TraceErr(err);
 	return err;
@@ -218,12 +218,13 @@ int xino_write(struct super_block *sb, aufs_bindex_t bindex, ino_t hidden_ino,
 	br = stobr(sb, bindex);
 	DEBUG_ON(!br || !br->br_xino);
 	pos = hidden_ino * sizeof(hidden_ino);
-	sz = fwrite(br->br_xino_write, br->br_xino, &ino, sizeof(ino), &pos);
+	sz = xino_fwrite(br->br_xino_write, br->br_xino, &ino, sizeof(ino),
+			 &pos);
 	//if (LktrCond) sz = 1;
 	if (sz == sizeof(ino))
 		return 0; /* success */
 
-	IOErr("write failed (%d)\n", sz);
+	IOErr("write failed (%ld)\n", (long)sz);
 	return -EIO;
 }
 
@@ -261,7 +262,7 @@ int xino_read(struct super_block *sb, aufs_bindex_t bindex, ino_t hidden_ino,
 	sz = 0;
 	pos2 = pos = hidden_ino * sizeof(hidden_ino);
 	if (i_size_read(file->f_dentry->d_inode) >= pos + sizeof(*ino)) {
-		sz = fread(br->br_xino_read, file, ino, sizeof(*ino), &pos);
+		sz = xino_fread(br->br_xino_read, file, ino, sizeof(*ino), &pos);
 		//if (LktrCond) sz = 1;
 		if (sz == sizeof(*ino) && *ino)
 			return 0; /* success */
@@ -272,18 +273,18 @@ int xino_read(struct super_block *sb, aufs_bindex_t bindex, ino_t hidden_ino,
 	if (!sz || sz == sizeof(*ino)) {
 		*ino = atomic_long_inc_return(&stosi(sb)->si_xino);
 		if (*ino >= AUFS_FIRST_INO) {
-			sz = fwrite(br->br_xino_write, file, ino, sizeof(*ino),
-				    &pos2);
+			sz = xino_fwrite(br->br_xino_write, file, ino,
+					 sizeof(*ino), &pos2);
 			//if (LktrCond) sz = 1;
 			if (sz == sizeof(ino))
 				return 0; /* success */
 			*ino = 0;
-			IOErr("write failed (%d)\n", sz);
+			IOErr("write failed (%ld)\n", (long)sz);
 			return -EIO;
 		} else
 			goto out_overflow;
 	}
-	IOErr("read failed (%d)\n", sz);
+	IOErr("read failed (%ld)\n", (long)sz);
  out:
 	return -EIO;
  out_overflow:
@@ -527,12 +528,15 @@ int xino_set(struct super_block *sb, struct opt_xino *xino, int remount)
 				continue;
 			IOErr("creating xino for branch %d(%d), "
 			      "forcing noxino\n", bindex, err);
-			au_flag_clr(sb, AuFlag_XINO);
 			err = -EIO;
 			break;
 		}
  out:
 	dput(parent);
+	if (!err)
+		au_flag_set(sb, AuFlag_XINO);
+	else
+		au_flag_clr(sb, AuFlag_XINO);
 	TraceErr(err);
 	return err;
 }
@@ -573,7 +577,7 @@ struct file *xino_def(struct super_block *sb)
 	bend = sbend(sb);
 	bwr = -1;
 	for (bindex = 0; bindex <= bend; bindex++)
-		if (sbr_perm(sb, bindex) == AuBrPerm_RW
+		if (br_writable(sbr_perm(sb, bindex))
 		    && !au_is_nfs(au_h_dptr_i(sb->s_root, bindex)->d_sb)) {
 			bwr = bindex;
 			break;

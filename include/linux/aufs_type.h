@@ -16,12 +16,12 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: aufs_type.h,v 1.47 2007/03/28 01:56:42 sfjro Exp $ */
+/* $Id: aufs_type.h,v 1.49 2007/04/09 02:47:10 sfjro Exp $ */
 
 #ifndef __AUFS_TYPE_H__
 #define __AUFS_TYPE_H__
 
-#define AUFS_VERSION	"20070328"
+#define AUFS_VERSION	"20070409"
 
 /* ---------------------------------------------------------------------- */
 
