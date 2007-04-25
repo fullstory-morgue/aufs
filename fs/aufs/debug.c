@@ -16,13 +16,15 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: debug.c,v 1.24 2007/04/09 02:47:10 sfjro Exp $ */
+/* $Id: debug.c,v 1.26 2007/04/23 00:55:15 sfjro Exp $ */
 
 #include "aufs.h"
 
-#if defined(CONFIG_LKTR) || defined(CONFIG_LKTR_MODULE)
 atomic_t aufs_cond = ATOMIC_INIT(0);
-#define dpri(fmt, arg...)	if (LktrCond) printk(KERN_DEBUG fmt, ##arg)
+
+#if defined(CONFIG_LKTR) || defined(CONFIG_LKTR_MODULE)
+#define dpri(fmt, arg...) \
+	do {if (LktrCond) printk(KERN_DEBUG fmt, ##arg);} while (0)
 #else
 #define dpri(fmt, arg...)	printk(KERN_DEBUG fmt, ##arg)
 #endif
@@ -241,4 +243,13 @@ void au_dpri_sb(struct super_block *sb)
 		//dpri("bindex %d\n", bindex);
 		do_pri_br(bindex, sbinfo->si_branch[0 + bindex]);
 	}
+}
+
+/* ---------------------------------------------------------------------- */
+
+void DbgSleep(int nsec)
+{
+	static DECLARE_WAIT_QUEUE_HEAD(wq);
+	Dbg("sleep %d sec\n", nsec);
+	wait_event_timeout(wq, 0, nsec * HZ);
 }

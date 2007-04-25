@@ -284,6 +284,12 @@ are no zero and any of them is larger than 2 or 3, you should set 'nwkq'
 module parameter greater then the default value.
 But the reason of the bad response is in your branch filesystem, to
 increase the number of aufs thread will not help you.
+
+The last number in <sysfs>/fs/aufs/stat after comma is the maximum
+number of the 'no-wait' enqueued work at a time. Aufs enqueues such
+work to the system global workqueue called 'events', but doesn't wait
+for its completion. Usually they does no harm the time-performance of
+aufs.
 .
 .TP
 .B brs=1 | 0
@@ -359,7 +365,7 @@ Use this as '<branch_dir>=ro+wh'.
 Usually, aufs creates a whiteout as a hardlink on a writable
 branch. This attributes prohibits aufs to create the hardlinked
 whiteout, including the source file of all hardlinked whiteout
-\*[AUFS_WH_PFX]\*[AUFS_WH_BASENAME].
+(\*[AUFS_WH_PFX]\*[AUFS_WH_BASENAME].)
 If you don't like a hardlink, or your writable branch doesn't support
 link(2), then use this attribute.
 But I am afraid a filesystem which doesn't support link(2) natively
@@ -777,10 +783,11 @@ handle for a filesystem is 64 bytes. Aufs uses 24 bytes for 32bit
 system, plus 12 bytes for 64bit system. The rest is a rootm for a file
 handle of a branch filesystem.
 .IP \(bu 4
-The 'xino' mount option is required since NFS file handle is
-based upon inode number.
+The External Inode Number Table (xino) is required since NFS file
+handle is based upon inode number. The mount option 'xino' is enabled
+by default.
 .IP \(bu 4
-The 'noplink' option is recommended.
+The 'noplink' option is recommended, currently.
 .IP \(bu 4
 If you add/del branches many times between the accesses to the same file
 from the same NFS client,

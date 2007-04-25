@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: plink.c,v 1.1 2007/04/02 01:16:10 sfjro Exp $ */
+/* $Id: plink.c,v 1.2 2007/04/23 00:57:55 sfjro Exp $ */
 
 #include "aufs.h"
 
@@ -184,7 +184,7 @@ static int whplink(struct dentry *h_dentry, struct inode *inode,
 
 	// always superio.
 	hi_lock_whplink(h_dir);
-	if (!au_is_kthread(current)) {
+	if (!is_aufsd(current)) {
 		struct do_whplink_args args = {
 			.errp		= &err,
 			.tgt		= tgtname,
@@ -194,7 +194,7 @@ static int whplink(struct dentry *h_dentry, struct inode *inode,
 			.nfsmnt		= au_do_nfsmnt(br->br_mnt),
 			.sb		= sb
 		};
-		wkq_wait(call_do_whplink, &args, /*dlgt*/0);
+		au_wkq_wait(call_do_whplink, &args, /*dlgt*/0);
 	} else
 		err = do_whplink(tgtname, len, h_parent, h_dentry,
 				 au_do_nfsmnt(br->br_mnt), sb);
@@ -325,6 +325,7 @@ void half_refresh_plink(struct super_block *sb, aufs_bindex_t br_id)
 				do_put_plink(plink, 1);
 		}
 		ii_write_unlock(inode);
+		//todo: bug?
 		iput(inode);
 	}
 	//spin_unlock(&sbinfo->si_plink_lock);

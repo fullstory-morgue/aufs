@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: dir.c,v 1.32 2007/04/09 02:45:00 sfjro Exp $ */
+/* $Id: dir.c,v 1.34 2007/04/23 00:55:26 sfjro Exp $ */
 
 #include "aufs.h"
 
@@ -24,7 +24,7 @@ static int reopen_dir(struct file *file)
 {
 	int err;
 	struct dentry *dentry, *hidden_dentry;
-	aufs_bindex_t bindex, btail;
+	aufs_bindex_t bindex, btail, bstart;
 	struct file *hidden_file;
 
 	dentry = file->f_dentry;
@@ -32,11 +32,19 @@ static int reopen_dir(struct file *file)
 	DEBUG_ON(!S_ISDIR(dentry->d_inode->i_mode));
 
 	/* open all hidden dirs */
-	bindex = dbstart(dentry);
-	set_fbstart(file, bindex);
+	bstart = dbstart(dentry);
+#if 1
+	for (bindex = fbstart(file); bindex < bstart; bindex++)
+		set_h_fptr(file, bindex, NULL);
+#endif
+	set_fbstart(file, bstart);
 	btail = dbtaildir(dentry);
+#if 1
+	for (bindex = fbend(file); btail < bindex; bindex--)
+		set_h_fptr(file, bindex, NULL);
+#endif
 	set_fbend(file, btail);
-	for (; bindex <= btail; bindex++) {
+	for (bindex = bstart; bindex <= btail; bindex++) {
 		hidden_dentry = au_h_dptr_i(dentry, bindex);
 		if (!hidden_dentry)
 			continue;
@@ -125,8 +133,8 @@ static int aufs_release_dir(struct inode *inode, struct file *file)
 	if (vdir_cache)
 		free_vdir(vdir_cache);
 	fi_write_unlock(file);
-	si_read_unlock(sb);
 	au_fin_finfo(file);
+	si_read_unlock(sb);
 	return 0;
 }
 
@@ -406,7 +414,7 @@ static int sio_test_empty(struct dentry *dentry, struct test_empty_arg *arg)
 			.dentry	= dentry,
 			.arg	= arg
 		};
-		wkq_wait(call_do_test_empty, &args, /*dlgt*/0);
+		au_wkq_wait(call_do_test_empty, &args, /*dlgt*/0);
 	}
 
 	TraceErr(err);
@@ -418,21 +426,25 @@ int au_test_empty_lower(struct dentry *dentry)
 	int err;
 	struct inode *inode;
 	struct test_empty_arg arg;
-	struct aufs_nhash whlist;
+	struct aufs_nhash *whlist;
 	aufs_bindex_t bindex, bstart, btail;
 
 	LKTRTrace("%.*s\n", DLNPair(dentry));
 	inode = dentry->d_inode;
 	DEBUG_ON(!inode || !S_ISDIR(inode->i_mode));
 
+	whlist = nhash_new(GFP_KERNEL);
+	err = PTR_ERR(whlist);
+	if (IS_ERR(whlist))
+		goto out;
+
 	bstart = dbstart(dentry);
-	init_nhash(&whlist);
-	arg.whlist = &whlist;
+	arg.whlist = whlist;
 	arg.whonly = 0;
 	arg.bindex = bstart;
 	err = do_test_empty(dentry, &arg);
 	if (unlikely(err))
-		goto out;
+		goto out_whlist;
 
 	arg.whonly = 1;
 	btail = dbtaildir(dentry);
@@ -446,8 +458,9 @@ int au_test_empty_lower(struct dentry *dentry)
 		}
 	}
 
+ out_whlist:
+	nhash_del(whlist);
  out:
-	free_nhash(&whlist);
 	TraceErr(err);
 	return err;
 }

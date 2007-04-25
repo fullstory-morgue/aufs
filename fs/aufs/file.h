@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: file.h,v 1.22 2007/04/09 02:44:47 sfjro Exp $ */
+/* $Id: file.h,v 1.23 2007/04/16 01:14:58 sfjro Exp $ */
 
 #ifndef __AUFS_FILE_H__
 #define __AUFS_FILE_H__
@@ -109,30 +109,7 @@ static inline int au_is_mmapped(struct file *f)
 
 /* ---------------------------------------------------------------------- */
 
-static inline void fi_read_lock(struct file *f)
-{
-	rw_read_lock(&ftofi(f)->fi_rwsem);
-}
-
-static inline void fi_read_unlock(struct file *f)
-{
-	rw_read_unlock(&ftofi(f)->fi_rwsem);
-}
-
-static inline void fi_downgrade_lock(struct file *f)
-{
-	rw_dgrade_lock(&ftofi(f)->fi_rwsem);
-}
-
-static inline void fi_write_lock(struct file *f)
-{
-	rw_write_lock(&ftofi(f)->fi_rwsem);
-}
-
-static inline void fi_write_unlock(struct file *f)
-{
-	rw_write_unlock(&ftofi(f)->fi_rwsem);
-}
+SimpleRwsemFuncs(fi, struct file *f, ftofi(f)->fi_rwsem);
 
 static inline void FiMustReadLock(struct file *f)
 {
@@ -150,6 +127,11 @@ static inline void FiMustAnyLock(struct file *f)
 {
 	SiMustAnyLock(f->f_dentry->d_sb);
 	RwMustAnyLock(&ftofi(f)->fi_rwsem);
+}
+
+static inline void FiMustNoWaiters(struct file *f)
+{
+	RwMustNoWaiters(&ftofi(f)->fi_rwsem);
 }
 
 #endif /* __KERNEL__ */

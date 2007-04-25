@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: misc.h,v 1.21 2007/03/28 01:46:16 sfjro Exp $ */
+/* $Id: misc.h,v 1.23 2007/04/23 00:57:09 sfjro Exp $ */
 
 #ifndef __AUFS_MISC_H__
 #define __AUFS_MISC_H__
@@ -130,12 +130,25 @@ static inline void RwMustNoWaiters(struct aufs_rwsem *rw)
 #undef rcnt_inc
 #undef rcnt_dec
 
+#define SimpleLockRwsemFuncs(prefix, param, rwsem) \
+static inline void prefix##_read_lock(param) {rw_read_lock(&(rwsem));} \
+static inline void prefix##_write_lock(param) {rw_write_lock(&(rwsem));}
+
+#define SimpleUnlockRwsemFuncs(prefix, param, rwsem) \
+static inline void prefix##_read_unlock(param) {rw_read_unlock(&(rwsem));} \
+static inline void prefix##_write_unlock(param) {rw_write_unlock(&(rwsem));} \
+static inline void prefix##_downgrade_lock(param) {rw_dgrade_lock(&(rwsem));}
+
+#define SimpleRwsemFuncs(prefix, param, rwsem) \
+	SimpleLockRwsemFuncs(prefix, param, rwsem); \
+	SimpleUnlockRwsemFuncs(prefix, param, rwsem)
+
 /* ---------------------------------------------------------------------- */
 
 typedef ssize_t (*readf_t)(struct file*, char __user*, size_t, loff_t*);
 typedef ssize_t (*writef_t)(struct file*, const char __user*, size_t, loff_t*);
 
-void *au_kzrealloc(void *p, int nused, int new_sz);
+void *au_kzrealloc(void *p, int nused, int new_sz, gfp_t gfp);
 struct nameidata *fake_dm(struct nameidata *fake_nd, struct nameidata *nd,
 			  struct super_block *sb, aufs_bindex_t bindex);
 void fake_dm_release(struct nameidata *fake_nd);
@@ -143,13 +156,6 @@ int au_copy_file(struct file *dst, struct file *src, loff_t len,
 		 struct super_block *sb, int *sparse);
 int test_ro(struct super_block *sb, aufs_bindex_t bindex, struct inode *inode);
 int au_test_perm(struct inode *h_inode, int mask, int dlgt);
-
-/* ---------------------------------------------------------------------- */
-
-static inline int au_is_kthread(struct task_struct *tsk)
-{
-	return !tsk->mm;
-}
 
 #endif /* __KERNEL__ */
 #endif /* __AUFS_MISC_H__ */

@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: f_op.c,v 1.22 2007/04/09 02:44:47 sfjro Exp $ */
+/* $Id: f_op.c,v 1.26 2007/04/23 00:55:54 sfjro Exp $ */
 
 #include <linux/fsnotify.h>
 #include <linux/pagemap.h>
@@ -112,8 +112,13 @@ static int aufs_open_nondir(struct inode *inode, struct file *file)
 
 static int aufs_release_nondir(struct inode *inode, struct file *file)
 {
+	struct super_block *sb = file->f_dentry->d_sb;
+
 	LKTRTrace("i%lu, %.*s\n", inode->i_ino, DLNPair(file->f_dentry));
+
+	si_read_lock(sb);
 	au_fin_finfo(file);
+	si_read_unlock(sb);
 	return 0;
 }
 
@@ -544,7 +549,7 @@ static unsigned int aufs_poll(struct file *file, poll_table *wait)
 static int aufs_fsync_nondir(struct file *file, struct dentry *dentry,
 			     int datasync)
 {
-	int err;
+	int err, my_lock;
 	struct inode *inode;
 	struct file *hidden_file;
 	struct super_block *sb;
@@ -552,10 +557,13 @@ static int aufs_fsync_nondir(struct file *file, struct dentry *dentry,
 	LKTRTrace("%.*s, %d\n", DLNPair(dentry), datasync);
 	inode = dentry->d_inode;
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,17)
+	IMustLock(inode);
+	my_lock = 0;
+#else
 	/* before 2.6.17,
 	 * msync(2) calls me without locking i_sem/i_mutex, but fsync(2).
 	 */
-	IMustLock(inode);
+	my_lock = !i_trylock(inode);
 #endif
 
 	sb = dentry->d_sb;
@@ -591,6 +599,8 @@ static int aufs_fsync_nondir(struct file *file, struct dentry *dentry,
  out_unlock:
 	fi_write_unlock(file);
  out:
+	if (unlikely(my_lock))
+		i_unlock(inode);
 	si_read_unlock(sb);
 	TraceErr(err);
 	return err;

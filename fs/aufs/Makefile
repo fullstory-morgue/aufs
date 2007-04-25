@@ -1,9 +1,9 @@
 # AUFS Makefile for the Linux 2.6.16 and later
-# $Id: Makefile,v 1.27 2007/04/02 01:12:31 sfjro Exp $
+# $Id: Makefile,v 1.29 2007/04/23 00:59:50 sfjro Exp $
 
 obj-$(CONFIG_AUFS) += aufs.o
 aufs-y := module.o super.o sbinfo.o xino.o \
-	branch.o vfsub.o cpup.o whout.o wkq.o plink.o \
+	branch.o cpup.o whout.o plink.o wkq.o dcsub.o vfsub.o \
 	opts.o \
 	dentry.o dinfo.o \
 	file.o f_op.o finfo.o \

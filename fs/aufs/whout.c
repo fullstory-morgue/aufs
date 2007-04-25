@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: whout.c,v 1.10 2007/04/09 02:47:35 sfjro Exp $ */
+/* $Id: whout.c,v 1.11 2007/04/23 00:58:27 sfjro Exp $ */
 
 #include <linux/fs.h>
 #include <linux/namei.h>
@@ -524,7 +524,7 @@ static void kick_reinit_br_wh(struct super_block *sb, struct aufs_branch *br)
 		arg->sb = sb;
 		arg->br = br;
 		br_get(br);
-		wkq_nowait(reinit_br_wh, arg, /*dlgt*/0);
+		au_wkq_nowait(reinit_br_wh, arg, /*dlgt*/0);
 		do_dec = 0;
 	}
 
@@ -659,7 +659,7 @@ struct dentry *sio_diropq(struct dentry *dentry, aufs_bindex_t bindex,
 			.do_create	= do_create,
 			.dlgt		= dlgt
 		};
-		wkq_wait(call_do_diropq, &args, /*dlgt*/0);
+		au_wkq_wait(call_do_diropq, &args, /*dlgt*/0);
 	}
 
 	TraceErrPtr(diropq);
@@ -845,7 +845,7 @@ int rmdir_whtmp(struct dentry *hidden_dentry, struct aufs_nhash *whlist,
 		};
 
 		lkup.dlgt = 0;
-		wkq_wait(call_del_wh_children, &args, /*dlgt*/0);
+		au_wkq_wait(call_del_wh_children, &args, /*dlgt*/0);
 		lkup.dlgt = dlgt;
 	}
 	hdir_unlock(hidden_inode, inode, bindex);
@@ -896,7 +896,7 @@ static void do_rmdir_whtmp(void *arg)
 		ii_write_unlock(a->inode);
 	}
 	dput(a->h_dentry);
-	free_nhash(&a->whlist);
+	nhash_fin(&a->whlist);
 	iput(a->inode);
 	si_read_unlock(sb);
 	i_unlock(a->dir);
@@ -915,11 +915,11 @@ void kick_rmdir_whtmp(struct dentry *hidden_dentry, struct aufs_nhash *whlist,
 
 	// all post-process will be done in do_rmdir_whtmp().
 	arg->h_dentry = dget(hidden_dentry);
-	init_nhash(&arg->whlist);
-	move_nhash(&arg->whlist, whlist);
+	nhash_init(&arg->whlist);
+	nhash_move(&arg->whlist, whlist);
 	arg->bindex = bindex;
 	arg->dir = igrab(dir);
 	arg->inode = igrab(inode);
 
-	wkq_nowait(do_rmdir_whtmp, arg, /*dlgt*/0);
+	au_wkq_nowait(do_rmdir_whtmp, arg, /*dlgt*/0);
 }

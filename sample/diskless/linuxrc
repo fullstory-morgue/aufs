@@ -18,7 +18,7 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
-# $Id: linuxrc,v 1.3 2007/03/12 01:54:56 sfjro Exp $
+# $Id: linuxrc,v 1.5 2007/04/23 00:59:51 sfjro Exp $
 
 set -e
 #echo here i am
@@ -36,12 +36,14 @@ export HOSTNAME SERVER BOOTFILE
 
 mount -t tmpfs tmp tmp
 remote=`dirname $BOOTFILE`
-for i in aufs.ko comount.sh
+for i in aufs.ko comount.sh exportfs.ko nfsd.ko
 do
 	tftp -g $SERVER -r $remote/$i -l tmp/$i > /dev/null 2>&1
 	test -f tmp/$i
 done
-insmod tmp/aufs.ko
+insmod tmp/exportfs.ko
+insmod tmp/nfsd.ko
+insmod tmp/aufs.ko brs=1
 
 eval `tr ' ' '\n' < /proc/cmdline | grep '^dl_label='`
 sh tmp/comount.sh $dl_label
@@ -57,12 +59,39 @@ test -h $f || { echo domain $DOMAIN; echo nameserver $DNSSRVS; } > $f
 echo 0x0100 > /proc/sys/kernel/real-root-dev
 umount /proc
 
-cd aufs
-mkdir -p initrd
-pivot_root . initrd
-/initrd/bin/busybox mount -nt proc proc /proc
-/initrd/bin/busybox egrep -v ' (root|cram)fs ' /proc/mounts > etc/mtab
-/initrd/bin/busybox umount /proc
-/initrd/bin/busybox mount -o remount,ro .
-#exec /sbin/init < /dev/console > /dev/console 2>&1 /dev/console
-trap "" 0
+if [ "$initrd" = "initramfs.gz" ]
+then
+	# rm
+	umount /branch
+	mkdir -p aufs/branch
+	#mount -t tmpfs none aufs/branch
+	set -x
+	for i in branch/* branch/loop/*
+	do
+		test -d $i || continue
+		mkdir -p aufs/$i
+		#/bin/mount -n --move $i aufs/$i || :
+		/bin/mount -n --move $i aufs/$i 2> /dev/null || :
+	done
+
+	cd aufs
+	/bin/mount -n --bind /tmp branch
+	mount -nt proc proc /proc
+	egrep -v ' (root|cram)fs ' /proc/mounts > etc/mtab
+	umount /proc
+	/bin/mount -n -o remount,ro aufsroot .
+	/bin/mount -n --move . /
+	test "$dl_label" = "knoppix" && mount -nt proc proc /proc
+	#/bin/sh -i
+	trap "" 0
+	exec chroot . sbin/init < dev/console > dev/console 2>&1 dev/console
+else
+	cd aufs
+	mkdir -p initrd
+	pivot_root . initrd
+	/initrd/bin/busybox mount -nt proc proc /proc
+	/initrd/bin/busybox egrep -v ' (root|cram)fs ' /proc/mounts > etc/mtab
+	/initrd/bin/busybox umount /proc
+	/initrd/bin/busybox mount -o remount,ro .
+	trap "" 0
+fi

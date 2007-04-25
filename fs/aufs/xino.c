@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: xino.c,v 1.23 2007/04/09 02:48:07 sfjro Exp $ */
+/* $Id: xino.c,v 1.24 2007/04/23 00:58:46 sfjro Exp $ */
 
 //#include <linux/fs.h>
 #include <linux/fsnotify.h>
@@ -126,7 +126,7 @@ static ssize_t xino_fwrite(writef_t func, struct file *file, void *buf,
 	 * it breaks RLIMIT_FSIZE and normal user's limit,
 	 * users should care about quota and real 'filesystem full.'
 	 */
-	if (!au_is_kthread(current)) {
+	if (!is_aufsd(current)) {
 		struct do_xino_fwrite_args args = {
 			.errp	= &err,
 			.func	= func,
@@ -135,7 +135,7 @@ static ssize_t xino_fwrite(writef_t func, struct file *file, void *buf,
 			.size	= size,
 			.pos	= pos
 		};
-		wkq_wait(call_do_xino_fwrite, &args, /*dlgt*/0);
+		au_wkq_wait(call_do_xino_fwrite, &args, /*dlgt*/0);
 	} else
 		err = do_xino_fwrite(func, file, buf, size, pos);
 
@@ -174,7 +174,7 @@ struct file *xino_create(struct super_block *sb, char *fname, int silent,
 	hidden_dir = hidden_parent->d_inode;
 	hi_lock_parent(hidden_dir);
 	err = vfsub_unlink(hidden_dir, file->f_dentry, /*dlgt*/0);
-	if (unlikely(udba && parent))
+	if (unlikely(!err && udba && parent))
 		au_direval_dec(parent);
 	i_unlock(hidden_dir);
 	dput(hidden_parent);
@@ -211,7 +211,7 @@ int xino_write(struct super_block *sb, aufs_bindex_t bindex, ino_t hidden_ino,
 	ssize_t sz;
 
 	LKTRTrace("b%d, hi%lu, i%lu\n", bindex, hidden_ino, ino);
-	//DEBUG_ON(!ino);
+
 	if (unlikely(!au_flag_test(sb, AuFlag_XINO)))
 		return 0;
 
@@ -326,15 +326,13 @@ static struct file *xino_create2(struct file *base_file)
 
 	base = base_file->f_dentry;
 	LKTRTrace("%.*s\n", DLNPair(base));
-	parent = base->d_parent;
+	parent = dget_parent(base);
 	dir = parent->d_inode;
 	IMustLock(dir);
 
-#if 0
 	file = ERR_PTR(-EINVAL);
-	if (unlikely(SB_NFS(parent->d_sb)))
+	if (unlikely(au_is_nfs(parent->d_sb)))
 		goto out;
-#endif
 
 	// do not superio, nor NFS.
 	name = &base->d_name;
@@ -371,6 +369,7 @@ static struct file *xino_create2(struct file *base_file)
  out_dput:
 	dput(dentry);
  out:
+	dput(parent);
 	TraceErrPtr(file);
 	return file;
 }
@@ -423,7 +422,6 @@ int xino_init(struct super_block *sb, aufs_bindex_t bindex,
 		if (IS_ERR(file))
 			goto out;
 	}
-	br->br_xino = file;
 	br->br_xino_read = find_readf(file);
 	err = PTR_ERR(br->br_xino_read);
 	if (IS_ERR(br->br_xino_read))
@@ -432,6 +430,7 @@ int xino_init(struct super_block *sb, aufs_bindex_t bindex,
 	err = PTR_ERR(br->br_xino_write);
 	if (IS_ERR(br->br_xino_write))
 		goto out_put;
+	br->br_xino = file;
 
 	inode = sb->s_root->d_inode;
 	hidden_inode = au_h_iptr_i(inode, bindex);
@@ -440,9 +439,10 @@ int xino_init(struct super_block *sb, aufs_bindex_t bindex,
 	if (!err)
 		return 0; /* success */
 
+	br->br_xino = NULL;
+
  out_put:
 	fput(file);
-	br->br_xino = NULL;
  out:
 	TraceErr(err);
 	return err;
@@ -479,7 +479,7 @@ int xino_set(struct super_block *sb, struct opt_xino *xino, int remount)
 	bend = sbend(sb);
 	for (bindex = bend; bindex >= 0; bindex--) {
 		br = stobr(sb, bindex);
-		if (br->br_xino && file_count(br->br_xino) > 1) {
+		if (unlikely(br->br_xino && file_count(br->br_xino) > 1)) {
 			fput(br->br_xino);
 			br->br_xino = NULL;
 		}
@@ -490,7 +490,7 @@ int xino_set(struct super_block *sb, struct opt_xino *xino, int remount)
 		struct inode *inode;
 
 		br = stobr(sb, bindex);
-		if (!br->br_xino)
+		if (unlikely(!br->br_xino))
 			continue;
 
 		DEBUG_ON(file_count(br->br_xino) != 1);
@@ -520,7 +520,7 @@ int xino_set(struct super_block *sb, struct opt_xino *xino, int remount)
 	}
 
 	for (bindex = 0; bindex <= bend; bindex++)
-		if (!stobr(sb, bindex)->br_xino) {
+		if (unlikely(!stobr(sb, bindex)->br_xino)) {
 			err = xino_init(sb, bindex, xino->file, /*do_test*/1);
 			//if (LktrCond) {fput(stobr(sb, bindex)->br_xino);
 			//stobr(sb, bindex)->br_xino = NULL; err = -1;}
@@ -560,6 +560,8 @@ int xino_clr(struct super_block *sb)
 			br->br_xino = NULL;
 		}
 	}
+
+	//todo: need to make iunique() to return the larger inode number
 
 	au_flag_clr(sb, AuFlag_XINO);
 	return 0;

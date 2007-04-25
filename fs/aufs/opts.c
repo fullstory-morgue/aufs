@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: opts.c,v 1.31 2007/04/09 02:46:10 sfjro Exp $ */
+/* $Id: opts.c,v 1.33 2007/04/23 00:57:45 sfjro Exp $ */
 
 #include <asm/types.h> // a distribution requires
 #include <linux/parser.h>
@@ -90,14 +90,14 @@ static match_table_t options = {
 	{Opt_nodlgt, "nodlgt"},
 #endif
 
+	{Opt_rdcache, "rdcache=%d"},
+	{Opt_rdcache, "rdcache:%d"},
 #if 0
 	{Opt_findrw_dir, "findrw=dir"},
 	{Opt_findrw_br, "findrw=br"},
 
 	{Opt_coo, "coo=%s"},
 
-	{Opt_rdcache, "rdcache=%d"},
-	{Opt_rdcache, "rdcache:%d"},
 	{Opt_deblk, "deblk=%d"},
 	{Opt_deblk, "deblk:%d"},
 	{Opt_nhash, "nhash=%d"},
@@ -242,10 +242,13 @@ static const int lkup_dirflags = LOOKUP_FOLLOW | LOOKUP_DIRECTORY;
 #ifdef CONFIG_AUFS_DEBUG
 static void dump_opts(struct opts *opts)
 {
-	struct opt_add *add;
-	struct opt_del *del;
-	struct opt_mod *mod;
-	struct opt_xino *xino;
+	/* reduce stack space */
+	union {
+		struct opt_add *add;
+		struct opt_del *del;
+		struct opt_mod *mod;
+		struct opt_xino *xino;
+	} u;
 	struct opt *opt;
 
 	TraceEnter();
@@ -254,33 +257,33 @@ static void dump_opts(struct opts *opts)
 	while (/* opt < opts_tail && */ opt->type != Opt_tail) {
 		switch (opt->type) {
 		case Opt_add:
-			add = &opt->add;
+			u.add = &opt->add;
 			LKTRTrace("add {b%d, %s, 0x%x, %p}\n",
-				  add->bindex, add->path, add->perm,
-				  add->nd.dentry);
+				  u.add->bindex, u.add->path, u.add->perm,
+				  u.add->nd.dentry);
 			break;
 		case Opt_del:
 		case Opt_idel:
-			del = &opt->del;
-			LKTRTrace("del {%s, %p}\n", del->path, del->h_root);
+			u.del = &opt->del;
+			LKTRTrace("del {%s, %p}\n", u.del->path, u.del->h_root);
 			break;
 		case Opt_mod:
 		case Opt_imod:
-			mod = &opt->mod;
+			u.mod = &opt->mod;
 			LKTRTrace("mod {%s, 0x%x, %p}\n",
-				  mod->path, mod->perm, mod->h_root);
+				  u.mod->path, u.mod->perm, u.mod->h_root);
 			break;
 		case Opt_append:
-			add = &opt->add;
+			u.add = &opt->add;
 			LKTRTrace("append {b%d, %s, 0x%x, %p}\n",
-				  add->bindex, add->path, add->perm,
-				  add->nd.dentry);
+				  u.add->bindex, u.add->path, u.add->perm,
+				  u.add->nd.dentry);
 			break;
 		case Opt_prepend:
-			add = &opt->add;
+			u.add = &opt->add;
 			LKTRTrace("prepend {b%d, %s, 0x%x, %p}\n",
-				  add->bindex, add->path, add->perm,
-				  add->nd.dentry);
+				  u.add->bindex, u.add->path, u.add->perm,
+				  u.add->nd.dentry);
 			break;
 		case Opt_dirwh:
 			LKTRTrace("dirwh %d\n", opt->dirwh);
@@ -289,9 +292,9 @@ static void dump_opts(struct opts *opts)
 			LKTRTrace("rdcache %d\n", opt->rdcache);
 			break;
 		case Opt_xino:
-			xino = &opt->xino;
+			u.xino = &opt->xino;
 			LKTRTrace("xino {%s %.*s}\n",
-				  xino->path, DLNPair(xino->file->f_dentry));
+				  u.xino->path, DLNPair(u.xino->file->f_dentry));
 			break;
 		case Opt_noxino:
 			LKTRLabel(noxino);
@@ -423,9 +426,12 @@ int au_parse_opts(struct super_block *sb, char *str, struct opts *opts)
 	substring_t args[MAX_OPT_ARGS];
 	aufs_bindex_t bindex;
 	struct nameidata nd;
-	struct opt_del *del;
-	struct opt_mod *mod;
-	struct opt_xino *xino;
+	/* reduce stack space */
+	union {
+		struct opt_del *del;
+		struct opt_mod *mod;
+		struct opt_xino *xino;
+	} u;
 	struct file *file;
 
 	LKTRTrace("%s, nopts %d\n", str, opts->max_opt);
@@ -475,24 +481,24 @@ int au_parse_opts(struct super_block *sb, char *str, struct opts *opts)
 				opt->type = token;
 			break;
 		case Opt_del:
-			del = &opt->del;
-			del->path = args[0].from;
-			LKTRTrace("del path %s\n", del->path);
+			u.del = &opt->del;
+			u.del->path = args[0].from;
+			LKTRTrace("del path %s\n", u.del->path);
 			// LSM may detect it
 			// do not superio.
-			err = path_lookup(del->path, lkup_dirflags, &nd);
+			err = path_lookup(u.del->path, lkup_dirflags, &nd);
 			if (unlikely(err)) {
-				Err("lookup failed %s (%d)\n", del->path, err);
+				Err("lookup failed %s (%d)\n", u.del->path, err);
 				break;
 			}
-			del->h_root = dget(nd.dentry);
+			u.del->h_root = dget(nd.dentry);
 			path_release(&nd);
 			opt->type = token;
 			break;
 #if 0
 		case Opt_idel:
-			del = &opt->del;
-			del->path = "(indexed)";
+			u.del = &opt->del;
+			u.del->path = "(indexed)";
 			if (unlikely(match_int(&args[0], &n))) {
 				Err("bad integer in %s\n", opt_str);
 				break;
@@ -505,39 +511,39 @@ int au_parse_opts(struct super_block *sb, char *str, struct opts *opts)
 				break;
 			}
 			err = 0;
-			del->h_root = dget(au_h_dptr_i(root, bindex));
+			u.del->h_root = dget(au_h_dptr_i(root, bindex));
 			opt->type = token;
 			aufs_read_unlock(root, !AUFS_I_RLOCK);
 			break;
 #endif
 
 		case Opt_mod:
-			mod = &opt->mod;
-			mod->path = args[0].from;
-			p = strchr(mod->path, '=');
+			u.mod = &opt->mod;
+			u.mod->path = args[0].from;
+			p = strchr(u.mod->path, '=');
 			if (unlikely(!p)) {
 				Err("no permssion %s\n", opt_str);
 				break;
 			}
 			*p++ = 0;
-			mod->perm = br_perm_val(p);
+			u.mod->perm = br_perm_val(p);
 			LKTRTrace("mod path %s, perm 0x%x, %s\n",
-				  mod->path, mod->perm, p);
+				  u.mod->path, u.mod->perm, p);
 			// LSM may detect it
 			// do not superio.
-			err = path_lookup(mod->path, lkup_dirflags, &nd);
+			err = path_lookup(u.mod->path, lkup_dirflags, &nd);
 			if (unlikely(err)) {
-				Err("lookup failed %s (%d)\n", mod->path, err);
+				Err("lookup failed %s (%d)\n", u.mod->path, err);
 				break;
 			}
-			mod->h_root = dget(nd.dentry);
+			u.mod->h_root = dget(nd.dentry);
 			path_release(&nd);
 			opt->type = token;
 			break;
 #if 0
 		case Opt_imod:
-			mod = &opt->mod;
-			mod->path = "(indexed)";
+			u.mod = &opt->mod;
+			u.mod->path = "(indexed)";
 			if (unlikely(match_int(&args[0], &n))) {
 				Err("bad integer in %s\n", opt_str);
 				break;
@@ -549,17 +555,17 @@ int au_parse_opts(struct super_block *sb, char *str, struct opts *opts)
 				aufs_read_unlock(root, !AUFS_I_RLOCK);
 				break;
 			}
-			mod->perm = br_perm_val(args[1].from);
+			u.mod->perm = br_perm_val(args[1].from);
 			LKTRTrace("mod path %s, perm 0x%x, %s\n",
-				  mod->path, mod->perm, args[1].from);
+				  u.mod->path, u.mod->perm, args[1].from);
 			err = 0;
-			mod->h_root = dget(au_h_dptr_i(root, bindex));
+			u.mod->h_root = dget(au_h_dptr_i(root, bindex));
 			opt->type = token;
 			aufs_read_unlock(root, !AUFS_I_RLOCK);
 			break;
 #endif
 		case Opt_xino:
-			xino = &opt->xino;
+			u.xino = &opt->xino;
 			file = xino_create(sb, args[0].from, /*silent*/0,
 					   /*parent*/NULL);
 			err = PTR_ERR(file);
@@ -572,8 +578,8 @@ int au_parse_opts(struct super_block *sb, char *str, struct opts *opts)
 				break;
 			}
 			err = 0;
-			xino->file = file;
-			xino->path = args[0].from;
+			u.xino->file = file;
+			u.xino->path = args[0].from;
 			opt->type = token;
 			break;
 
@@ -985,7 +991,7 @@ int au_do_opts_remount(struct super_block *sb, struct opts *opts,
 	struct inode *dir;
 	struct opt_xino *opt_xino;
 	struct opt *opt;
-	unsigned int flags;
+	unsigned int dlgt;
 
 	TraceEnter();
 	SiMustWriteLock(sb);
@@ -997,33 +1003,23 @@ int au_do_opts_remount(struct super_block *sb, struct opts *opts,
 	err = 0;
 	*do_refresh = 0;
 	*given = 0;
-	flags = au_flag_test(sb, AuMask_UDBA | AuFlag_DLGT);
+	dlgt = au_flag_test(sb, AuFlag_DLGT);
 	opt_xino = NULL;
 	opt = opts->opt;
 	while (err >= 0 && opt->type != Opt_tail) {
 		err = au_do_opt_simple(sb, opt, /*remount*/1, given);
 
-		/* disable them temporary */
-		flags = au_flag_test(sb, AuMask_UDBA | AuFlag_DLGT);
-#if 0
-		if (unlikely(flags & AuFlag_UDBA_INOTIFY))
-			udba_set(sb, AuFlag_UDBA_REVAL);
-#endif
-		if (unlikely(flags & AuFlag_DLGT))
-			au_flag_clr(sb, AuFlag_DLGT);
+		/* disable it temporary */
+		dlgt = au_flag_test(sb, AuFlag_DLGT);
+		au_flag_clr(sb, AuFlag_DLGT);
 
 		if (!err)
 			err = au_do_opt_br(sb, opt, /*remount*/1, do_refresh);
 		if (!err)
 			err = au_do_opt_xino(sb, opt, /*remount*/1, &opt_xino);
 
-		/* restore them, in half */
-#if 0
-		if (unlikely(flags & AuFlag_UDBA_INOTIFY))
-			udba_set(sb, flags & AuMask_UDBA);
-#endif
-		if (unlikely(flags & AuFlag_DLGT))
-			au_flag_set(sb, AuFlag_DLGT);
+		/* restore it */
+		au_flag_set(sb, dlgt);
 		opt++;
 	}
 	if (err > 0)
@@ -1033,13 +1029,9 @@ int au_do_opts_remount(struct super_block *sb, struct opts *opts,
 	/* go on if err */
 
 	//todo: test this error case.
-	if (!(flags & AuFlag_DLGT))
-		rerr = verify_opts(sb, /*remount*/1);
-	else {
-		au_flag_clr(sb, AuFlag_DLGT);
-		rerr = verify_opts(sb, /*remount*/1);
-		au_flag_set(sb, AuFlag_DLGT);
-	}
+	au_flag_clr(sb, AuFlag_DLGT);
+	rerr = verify_opts(sb, /*remount*/1);
+	au_flag_set(sb, dlgt);
 
 	/* they are handled by the caller */
 	if (!*do_refresh)

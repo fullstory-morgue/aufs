@@ -14,6 +14,6 @@ ${NfsCdDir}/kmod: ${DLModTar}
 ${NfsCdKo}:
 	tar -xpjf ${DLModTar} ${NfsCdKoFull}
 	mv -i ${NfsCdKoFull} .
-	find lib -type d -depth | xargs rmdir
+	find lib -depth -type d | xargs rmdir
 ${NfsCdDir}/%: %
 	cp -pu $< $@

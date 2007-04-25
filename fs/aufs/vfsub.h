@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: vfsub.h,v 1.5 2007/04/02 01:14:31 sfjro Exp $ */
+/* $Id: vfsub.h,v 1.6 2007/04/23 00:59:51 sfjro Exp $ */
 
 #ifndef __AUFS_VFSUB_H__
 #define __AUFS_VFSUB_H__
@@ -25,13 +25,17 @@
 #include <asm/uaccess.h>
 
 #ifdef __KERNEL__
+#include "wkq.h"
 
 /* ---------------------------------------------------------------------- */
 
 static inline
 int do_vfsub_permission(struct inode *inode, int mask, struct nameidata *nd)
 {
+#if 0
+#else
 	return permission(inode, mask, nd);
+#endif
 }
 
 static inline
@@ -61,21 +65,30 @@ static inline
 int do_vfsub_create(struct inode *dir, struct dentry *dentry, int mode,
 		    struct nameidata *nd)
 {
+#if 0
+#else
 	return vfs_create(dir, dentry, mode, nd);
+#endif
 }
 
 static inline
 int do_vfsub_symlink(struct inode *dir, struct dentry *dentry,
 		     const char *symname, int mode)
 {
+#if 0
+#else
 	return vfs_symlink(dir, dentry, symname, mode);
+#endif
 }
 
 static inline
 int do_vfsub_mknod(struct inode *dir, struct dentry *dentry, int mode,
 		   dev_t dev)
 {
+#if 0
+#else
 	return vfs_mknod(dir, dentry, mode, dev);
+#endif
 }
 
 static inline
@@ -84,7 +97,10 @@ int do_vfsub_link(struct dentry *src_dentry, struct inode *dir,
 {
 	int err;
 	lockdep_off();
+#if 0
+#else
 	err = vfs_link(src_dentry, dir, dentry);
+#endif
 	lockdep_on();
 	return err;
 }
@@ -95,7 +111,10 @@ int do_vfsub_rename(struct inode *src_dir, struct dentry *src_dentry,
 {
 	int err;
 	lockdep_off();
+#if 0
+#else
 	err = vfs_rename(src_dir, src_dentry, dir, dentry);
+#endif
 	lockdep_on();
 	return err;
 }
@@ -103,14 +122,20 @@ int do_vfsub_rename(struct inode *src_dir, struct dentry *src_dentry,
 static inline
 int do_vfsub_mkdir(struct inode *dir, struct dentry *dentry, int mode)
 {
+#if 0
+#else
 	return vfs_mkdir(dir, dentry, mode);
+#endif
 }
 
 static inline int do_vfsub_rmdir(struct inode *dir, struct dentry *dentry)
 {
 	int err;
 	lockdep_off();
+#if 0
+#else
 	err = vfs_rmdir(dir, dentry);
+#endif
 	lockdep_on();
 	return err;
 }
@@ -124,7 +149,10 @@ ssize_t do_vfsub_read_u(struct file *file, char __user *ubuf, size_t count,
 	ssize_t err;
 	// nfs uses some locks
 	lockdep_off();
+#if 0
+#else
 	err = vfs_read(file, ubuf, count, ppos);
+#endif
 	lockdep_on();
 	return err;
 }
@@ -150,7 +178,10 @@ ssize_t do_vfsub_write_u(struct file *file, const char __user *ubuf,
 {
 	ssize_t err;
 	lockdep_off();
+#if 0
+#else
 	err = vfs_write(file, ubuf, count, ppos);
+#endif
 	lockdep_on();
 	return err;
 }
@@ -174,7 +205,10 @@ int do_vfsub_readdir(struct file *file, filldir_t filldir, void *arg)
 {
 	int err;
 	lockdep_off();
+#if 0
+#else
 	err = vfs_readdir(file, filldir, arg);
+#endif
 	lockdep_on();
 	return err;
 }
@@ -185,7 +219,10 @@ static inline loff_t vfsub_llseek(struct file *file, loff_t offset, int origin)
 {
 	loff_t err;
 	lockdep_off();
+#if 0
+#else
 	err = vfs_llseek(file, offset, origin);
+#endif
 	lockdep_on();
 	return err;
 }
@@ -195,7 +232,7 @@ static inline loff_t vfsub_llseek(struct file *file, loff_t offset, int origin)
 #ifdef CONFIG_AUFS_DLGT
 static inline int need_dlgt(struct super_block *sb)
 {
-	return au_flag_test(sb, AuFlag_DLGT) && !au_is_kthread(current);
+	return (au_flag_test(sb, AuFlag_DLGT) && !is_aufsd(current));
 }
 
 int vfsub_permission(struct inode *inode, int mask, struct nameidata *nd,

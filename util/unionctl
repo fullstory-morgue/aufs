@@ -16,7 +16,7 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
-# $Id: unionctl,v 1.21 2007/03/12 01:54:26 sfjro Exp $
+# $Id: unionctl,v 1.22 2007/04/16 01:19:49 sfjro Exp $
 
 # simple script for controling aufs.
 # compatible with unionctl(8) in unionfs(5).
@@ -80,7 +80,7 @@ set -e
 #set -x; echo $@
 tmp=/tmp/$$
 cd "$1"
-mntpnt="$PWD"
+mntpnt=`readlink -f "$PWD"`
 e_mntpnt=`echo "$mntpnt" | conv escape`
 cd "$OLDPWD"
 action="$2"

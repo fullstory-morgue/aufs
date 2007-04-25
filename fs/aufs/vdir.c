@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: vdir.c,v 1.17 2007/03/27 12:51:44 sfjro Exp $ */
+/* $Id: vdir.c,v 1.19 2007/04/23 00:55:40 sfjro Exp $ */
 
 #include "aufs.h"
 
@@ -69,14 +69,32 @@ static aufs_deblk_t *last_deblk(struct aufs_vdir *vdir)
 	return vdir->vd_deblk[vdir->vd_nblk - 1];
 }
 
-void init_nhash(struct aufs_nhash *nhash)
+void nhash_init(struct aufs_nhash *nhash)
 {
 	int i;
 	for (i = 0; i < AUFS_NHASH_SIZE; i++)
 		INIT_HLIST_HEAD(nhash->heads + i);
 }
 
-void move_nhash(struct aufs_nhash *dst, struct aufs_nhash *src)
+struct aufs_nhash *nhash_new(gfp_t gfp)
+{
+	struct aufs_nhash *nhash;
+
+	nhash = kmalloc(sizeof(*nhash), gfp);
+	if (nhash) {
+		nhash_init(nhash);
+		return nhash;
+	}
+	return ERR_PTR(-ENOMEM);
+}
+
+void nhash_del(struct aufs_nhash *nhash)
+{
+	nhash_fin(nhash);
+	kfree(nhash);
+}
+
+void nhash_move(struct aufs_nhash *dst, struct aufs_nhash *src)
 {
 	int i;
 
@@ -98,7 +116,7 @@ void move_nhash(struct aufs_nhash *dst, struct aufs_nhash *src)
 
 /* ---------------------------------------------------------------------- */
 
-void free_nhash(struct aufs_nhash *whlist)
+void nhash_fin(struct aufs_nhash *whlist)
 {
 	int i;
 	struct hlist_head *head;
@@ -210,7 +228,7 @@ static int append_deblk(struct aufs_vdir *vdir)
 
 	err = -ENOMEM;
 	sz = sizeof(*o) * vdir->vd_nblk;
-	o = au_kzrealloc(vdir->vd_deblk, sz, sz + sizeof(*o));
+	o = au_kzrealloc(vdir->vd_deblk, sz, sz + sizeof(*o), GFP_KERNEL);
 	if (unlikely(!o))
 		goto out;
 	vdir->vd_deblk = o;
@@ -494,8 +512,8 @@ static int read_vdir(struct file *file, int may_read)
 		goto out_delist;
 	err = 0;
 	for (bindex = 0; bindex <= bend; bindex++) {
-		init_nhash(arg.delist + bindex);
-		init_nhash(arg.whlist + bindex);
+		nhash_init(arg.delist + bindex);
+		nhash_init(arg.whlist + bindex);
 	}
 
 	dlgt = need_dlgt(sb);
@@ -525,7 +543,7 @@ static int read_vdir(struct file *file, int may_read)
 
 	for (bindex = bstart; bindex <= bend; bindex++) {
 		free_dehlist(arg.delist + bindex);
-		free_nhash(arg.whlist + bindex);
+		nhash_fin(arg.whlist + bindex);
 	}
 	kfree(arg.whlist);
 
@@ -560,7 +578,7 @@ static int copy_vdir(struct aufs_vdir *tgt, struct aufs_vdir *src)
 	if (tgt->vd_nblk < src->vd_nblk) {
 		aufs_deblk_t **p;
 		p = au_kzrealloc(tgt->vd_deblk, sizeof(*p) * tgt->vd_nblk,
-				 sizeof(*p) * src->vd_nblk);
+				 sizeof(*p) * src->vd_nblk, GFP_KERNEL);
 		if (unlikely(!p))
 			goto out;
 		tgt->vd_deblk = p;

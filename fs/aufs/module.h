@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: module.h,v 1.5 2007/03/27 12:47:23 sfjro Exp $ */
+/* $Id: module.h,v 1.6 2007/04/23 00:57:34 sfjro Exp $ */
 
 #ifndef __AUFS_MODULE_H__
 #define __AUFS_MODULE_H__
@@ -32,37 +32,25 @@ extern char au_esc_chars[];
 extern short aufs_nwkq;
 extern int sysaufs_brs, au_dir_roflags;
 
-// wkq.c
-extern struct au_wkq *au_wkq;
-
 /* kmem cache */
 enum {AuCache_DINFO, AuCache_ICNTNR, AuCache_FINFO, AuCache_VDIR,
       AuCache_DEHSTR, AuCache_HINOTIFY, AuCache_Last};
 extern struct kmem_cache *aufs_cachep[];
 
-static inline void *aufs_cache_alloc(int i)
-{
-	return kmem_cache_alloc(aufs_cachep[i], GFP_KERNEL);
-}
+#define CacheFuncs(name, index) \
+static inline void *cache_alloc_##name(void) \
+{return kmem_cache_alloc(aufs_cachep[index], GFP_KERNEL);} \
+static inline void cache_free_##name(void *p) \
+{kmem_cache_free(aufs_cachep[index], p);}
 
-#define cache_alloc_dinfo() 	aufs_cache_alloc(AuCache_DINFO)
-#define cache_alloc_icntnr() 	aufs_cache_alloc(AuCache_ICNTNR)
-#define cache_alloc_finfo() 	aufs_cache_alloc(AuCache_FINFO)
-#define cache_alloc_vdir() 	aufs_cache_alloc(AuCache_VDIR)
-#define cache_alloc_dehstr() 	aufs_cache_alloc(AuCache_DEHSTR)
-#define cache_alloc_hinotify() 	aufs_cache_alloc(AuCache_HINOTIFY)
+CacheFuncs(dinfo, AuCache_DINFO);
+CacheFuncs(icntnr, AuCache_ICNTNR);
+CacheFuncs(finfo, AuCache_FINFO);
+CacheFuncs(vdir, AuCache_VDIR);
+CacheFuncs(dehstr, AuCache_DEHSTR);
+CacheFuncs(hinotify, AuCache_HINOTIFY);
 
-static inline void aufs_cache_free(int i, void *p)
-{
-	kmem_cache_free(aufs_cachep[i], p);
-}
-
-#define cache_free_dinfo(p)	aufs_cache_free(AuCache_DINFO, p)
-#define cache_free_icntnr(p)	aufs_cache_free(AuCache_ICNTNR, p)
-#define cache_free_finfo(p)	aufs_cache_free(AuCache_FINFO, p)
-#define cache_free_vdir(p)	aufs_cache_free(AuCache_VDIR, p)
-#define cache_free_dehstr(p)	aufs_cache_free(AuCache_DEHSTR, p)
-#define cache_free_hinotify(p)	aufs_cache_free(AuCache_HINOTIFY, p)
+#undef CacheFuncs
 
 //sysaufs.c
 #ifdef CONFIG_AUFS_SYSAUFS

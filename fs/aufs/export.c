@@ -16,12 +16,12 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: export.c,v 1.3 2007/04/09 02:45:00 sfjro Exp $ */
+/* $Id: export.c,v 1.5 2007/04/23 00:59:50 sfjro Exp $ */
 
 #include "aufs.h"
 
 extern struct export_operations export_op_default;
-#define CALL(ops, func)	((ops->func) ? (ops->func) : export_op_default.func)
+#define CALL(ops, func)	(((ops)->func) ? ((ops)->func) : export_op_default.func)
 #define is_anon(d)	((d)->d_flags & DCACHE_DISCONNECTED)
 
 union conv {
@@ -283,10 +283,15 @@ decode_by_path(struct super_block *sb, aufs_bindex_t bindex, __u32 *fh,
 	int len, err;
 	struct file *h_file;
 	struct nameidata nd;
+	struct aufs_branch *br;
 
 	LKTRTrace("b%d\n", bindex);
+	SiMustAnyLock(sb);
 
-	h_sb = sbr_sb(sb, bindex);
+	br = stobr(sb, bindex);
+	//br_get(br);
+	h_mnt = br->br_mnt;
+	h_sb = h_mnt->mnt_sb;
 	LKTRTrace("%s, h_decode_fh\n", au_sbtype(h_sb));
 	h_parent = CALL(h_sb->s_export_op, decode_fh)
 		(h_sb, fh + Fh_tail, fh_len - Fh_tail, fh[Fh_h_type],
@@ -315,7 +320,6 @@ decode_by_path(struct super_block *sb, aufs_bindex_t bindex, __u32 *fh,
 	di_read_lock_parent(root, !AUFS_I_RLOCK);
 	h_root = au_h_dptr_i(root, bindex);
 	di_read_unlock(root, !AUFS_I_RLOCK);
-	h_mnt = sbr_mnt(sb, bindex);
 	arg.h_path = d_path(h_root, h_mnt, path, PATH_MAX);
 	dentry = (void*)arg.h_path;
 	if (unlikely(!arg.h_path || IS_ERR(arg.h_path)))
@@ -367,6 +371,7 @@ decode_by_path(struct super_block *sb, aufs_bindex_t bindex, __u32 *fh,
  out_putname:
 	__putname(path);
  out:
+	//br_put(br);
 	TraceErrPtr(dentry);
 	return dentry;
 }
@@ -383,7 +388,7 @@ aufs_decode_fh(struct super_block *sb, __u32 *fh, int fh_len, int fh_type,
 	aufs_bindex_t bindex, br_id, sigen_v;
 	struct inode *inode, *h_inode;
 
-	//atomic_inc(&aufs_cond);
+	//au_debug_on();
 	LKTRTrace("%d, fh{i%u, br_id_sigen 0x%x, hi%u}\n",
 		  fh_type, fh[Fh_ino], fh[Fh_br_id_sigen], fh[Fh_h_ino]);
 	DEBUG_ON(fh_len < Fh_tail);
@@ -442,7 +447,7 @@ aufs_decode_fh(struct super_block *sb, __u32 *fh, int fh_len, int fh_type,
 	lockdep_on();
 	si_read_unlock(sb);
 	TraceErrPtr(dentry);
-	//atomic_dec(&aufs_cond);
+	//au_debug_off();
 	return dentry;
 }
 
@@ -458,7 +463,7 @@ static int aufs_encode_fh(struct dentry *dentry, __u32 *fh, int *max_len,
 	union conv u;
 	struct dentry *parent, *h_parent;
 
-	//atomic_inc(&aufs_cond);
+	//au_debug_on();
 	BUILD_BUG_ON(sizeof(u.ino) != sizeof(u.a));
 	LKTRTrace("%.*s, max %d, conn %d\n",
 		  DLNPair(dentry), *max_len, connectable);
@@ -543,7 +548,7 @@ static int aufs_encode_fh(struct dentry *dentry, __u32 *fh, int *max_len,
 	aufs_read_unlock(dentry, AUFS_I_RLOCK);
  out:
 	TraceErr(err);
-	//atomic_dec(&aufs_cond);
+	//au_debug_off();
 	if (unlikely(err < 0))
 		err = 255;
 	return err;

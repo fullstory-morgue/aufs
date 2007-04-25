@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: i_op_del.c,v 1.30 2007/04/09 02:45:36 sfjro Exp $ */
+/* $Id: i_op_del.c,v 1.32 2007/04/23 00:56:45 sfjro Exp $ */
 
 #include "aufs.h"
 
@@ -147,6 +147,7 @@ static int renwh_and_rmdir(struct dentry *dentry, aufs_bindex_t bindex,
 
 	err = rename_whtmp(dentry, bindex);
 	//err = -1;
+	//todo: bug
 	if (unlikely(err)) {
 		au_direval_inc(dentry->d_parent);
 		return err;
@@ -287,7 +288,7 @@ int aufs_rmdir(struct inode *dir, struct dentry *dentry)
 	struct dtime dt;
 	aufs_bindex_t bwh, bindex, bstart;
 	struct rmdir_whtmp_arg *arg;
-	struct aufs_nhash whlist;
+	struct aufs_nhash *whlist;
 
 	LKTRTrace("i%lu, %.*s\n", dir->i_ino, DLNPair(dentry));
 	IMustLock(dir);
@@ -296,19 +297,21 @@ int aufs_rmdir(struct inode *dir, struct dentry *dentry)
 		return -ENOENT; // possible?
 	IMustLock(inode);
 
-	aufs_read_lock(dentry, AUFS_D_WLOCK);
-	parent = dentry->d_parent;
-	di_write_lock_parent(parent);
+	whlist = nhash_new(GFP_KERNEL);
+	err = PTR_ERR(whlist);
+	if (IS_ERR(whlist))
+		goto out;
 
 	err = -ENOMEM;
-	rmdir_later = 0;
 	arg = kmalloc(sizeof(*arg), GFP_KERNEL);
 	//arg = NULL;
 	if (unlikely(!arg))
-		goto out;
+		goto out_whlist;
 
-	init_nhash(&whlist);
-	err = test_empty(dentry, &whlist);
+	aufs_read_lock(dentry, AUFS_D_WLOCK);
+	parent = dentry->d_parent;
+	di_write_lock_parent(parent);
+	err = test_empty(dentry, whlist);
 	//err = -1;
 	if (unlikely(err))
 		goto out_arg;
@@ -320,16 +323,17 @@ int aufs_rmdir(struct inode *dir, struct dentry *dentry)
 	//wh_dentry = ERR_PTR(-1);
 	err = PTR_ERR(wh_dentry);
 	if (IS_ERR(wh_dentry))
-		goto out;
+		goto out_arg;
 
 	hidden_dentry = au_h_dptr(dentry);
 	dget(hidden_dentry);
 	hidden_parent = hidden_dentry->d_parent;
 	hidden_dir = hidden_parent->d_inode;
 
+	rmdir_later = 0;
 	if (bindex == bstart) {
 		IMustLock(hidden_dir);
-		err = renwh_and_rmdir(dentry, bstart, &whlist, dir);
+		err = renwh_and_rmdir(dentry, bstart, whlist, dir);
 		//err = -1;
 		if (err > 0) {
 			rmdir_later = err;
@@ -351,7 +355,7 @@ int aufs_rmdir(struct inode *dir, struct dentry *dentry)
 		epilog(dir, dentry, bindex);
 
 		if (rmdir_later) {
-			kick_rmdir_whtmp(hidden_dentry, &whlist, bstart, dir,
+			kick_rmdir_whtmp(hidden_dentry, whlist, bstart, dir,
 					 inode, arg);
 			arg = NULL;
 		}
@@ -374,12 +378,12 @@ int aufs_rmdir(struct inode *dir, struct dentry *dentry)
 	dput(wh_dentry);
 	dput(hidden_dentry);
  out_arg:
-	free_nhash(&whlist);
-	if (arg)
-		kfree(arg);
- out:
 	di_write_unlock(parent);
 	aufs_read_unlock(dentry, AUFS_D_WLOCK);
+	kfree(arg);
+ out_whlist:
+	nhash_del(whlist);
+ out:
 	TraceErr(err);
 	return err;
 }
