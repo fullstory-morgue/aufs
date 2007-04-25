@@ -17,7 +17,7 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
-# $Id: Makefile,v 1.2 2007/03/12 01:54:55 sfjro Exp $
+# $Id: Makefile,v 1.4 2007/04/23 00:59:51 sfjro Exp $
 
 include def.mk
 -include priv_def.mk
@@ -25,7 +25,10 @@ include def.mk
 MAKE += --no-print-directory
 export
 
-TftpTgt = aufs.ko comount.sh initrd pxelinux.0 pxelinux.cfg/default vmlinuz
+TftpTgt = aufs.ko comount.sh \
+	initrd initramfs.gz \
+	pxelinux.0 pxelinux.cfg/default \
+	vmlinuz nfsd.ko exportfs.ko
 TftpTgt := $(addprefix ${TftpDir}/, ${TftpTgt})
 
 all:
@@ -34,7 +37,7 @@ all:
 
 clean:
 	${RM} pxelinux.0 busybox
-	${RM} typescript dhcpdDL.conf initrd diskless.html
+	${RM} typescript dhcpdDL.conf initrd initramfs.gz diskless.html
 	${RM} -r ${DebPkgInfoDir} initrd.dir
 	${RM} *~ .*~
 
@@ -96,7 +99,7 @@ dhcpdDL.conf: ${DhcpdConfIn} ${DhcpClients}
 
 ########################################
 
-initrd busybox initrd.dir:
+initrd busybox initrd.dir initramfs.gz:
 	${MAKE} -f initrd.mk $@
 
 ########################################
@@ -116,6 +119,10 @@ ${TftpDir}/pxelinux.cfg/default: pxe.conf
 	cp -pu $< $@
 ${TftpDir}/comount.sh: ${Comount}
 	cp -pu $< $@
+nfsd.ko exportfs.ko: ko = $(addprefix lib/modules/${KVer}/kernel/, \
+	fs/nfsd/nfsd.ko fs/exportfs/exportfs.ko)
+nfsd.ko exportfs.ko:
+	${MAKE} -f nfscd.mk NfsCdKoFull="${ko}" NfsCdKo="$@" $@
 tftp: ${TftpTgt}
 
 ########################################

@@ -16,12 +16,11 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: super.c,v 1.45 2007/04/09 02:46:41 sfjro Exp $ */
+/* $Id: super.c,v 1.47 2007/04/23 00:58:07 sfjro Exp $ */
 
 #include <linux/module.h>
 #include <linux/seq_file.h>
 #include <linux/statfs.h>
-//#include <linux/version.h>
 #include "aufs.h"
 
 /*
@@ -107,22 +106,19 @@ static int aufs_show_options(struct seq_file *m, struct vfsmount *mnt)
 	struct super_block *sb;
 	struct aufs_sbinfo *sbinfo;
 	struct dentry *root;
+	struct file *xino;
 
 	TraceEnter();
 
 	sb = mnt->mnt_sb;
 	root = sb->s_root;
 	aufs_read_lock(root, !AUFS_I_RLOCK);
-	sbinfo = stosi(sb);
 	if (au_flag_test(sb, AuFlag_XINO)) {
-		struct aufs_branch *br;
-
 		err = seq_puts(m, ",xino=");
 		if (unlikely(err))
 			goto out;
-		br = stobr(sb, 0);
-		err = seq_path(m, br->br_xino->f_vfsmnt,
-			       br->br_xino->f_dentry, au_esc_chars);
+		xino = stobr(sb, 0)->br_xino;
+		err = seq_path(m, xino->f_vfsmnt, xino->f_dentry, au_esc_chars);
 		if (unlikely(err <= 0))
 			goto out;
 		err = 0;
@@ -148,6 +144,7 @@ static int aufs_show_options(struct seq_file *m, struct vfsmount *mnt)
 	if (unlikely(!err && (AuDefFlags & AuFlag_DLGT) != n))
 		err = seq_printf(m, ",%sdlgt", n ? "" : "no");
 
+	sbinfo = stosi(sb);
 	n = sbinfo->si_dirwh;
 	if (unlikely(!err && n != AUFS_DIRWH_DEF))
 		err = seq_printf(m, ",dirwh=%d", n);
@@ -183,15 +180,15 @@ static int aufs_show_options(struct seq_file *m, struct vfsmount *mnt)
 #define StatfsLock(d)	aufs_read_lock((d)->d_sb->s_root, 0)
 #define StatfsUnlock(d)	aufs_read_unlock((d)->d_sb->s_root, 0)
 #define StatfsArg(d)	au_h_dptr((d)->d_sb->s_root)
-#define StatfsHInode(d)	StatfsArg(d)->d_inode
-#define StatfsSb(d)	(d)->d_sb
+#define StatfsHInode(d)	(StatfsArg(d)->d_inode)
+#define StatfsSb(d)	((d)->d_sb)
 static int aufs_statfs(struct dentry *arg, struct kstatfs *buf)
 #else
 #define StatfsLock(s)	si_read_lock(s)
 #define StatfsUnlock(s)	si_read_unlock(s)
 #define StatfsArg(s)	sbr_sb(s, 0)
-#define StatfsHInode(s)	StatfsArg(s)->s_root->d_inode
-#define StatfsSb(s)	s
+#define StatfsHInode(s)	(StatfsArg(s)->s_root->d_inode)
+#define StatfsSb(s)	(s)
 static int aufs_statfs(struct super_block *arg, struct kstatfs *buf)
 #endif
 {
@@ -225,6 +222,10 @@ static void aufs_umount_begin(struct super_block *arg)
 {
 	struct super_block *sb = UmountBeginSb(arg);
 
+#if 0
+	// extra ref for initramfs
+	dput(sb->s_root); //dput(sb->s_root); dput(sb->s_root);
+#endif
 	if (unlikely(!stosi(sb)))
 		return;
 
@@ -233,8 +234,10 @@ static void aufs_umount_begin(struct super_block *arg)
 		au_put_plink(sb);
 		//kobj_umount(stosi(sb));
 	}
+#if 0
 	if (unlikely(au_flag_test(sb, AuFlag_UDBA_INOTIFY)))
 		shrink_dcache_sb(sb);
+#endif
 	si_write_unlock(sb);
 }
 
@@ -278,94 +281,83 @@ static int do_refresh_dir(struct dentry *dentry, unsigned int flags)
 {
 	int err;
 	struct dentry *parent;
+	struct inode *inode;
 
 	LKTRTrace("%.*s\n", DLNPair(dentry));
-	DEBUG_ON(!dentry->d_inode || !S_ISDIR(dentry->d_inode->i_mode));
+	inode = dentry->d_inode;
+	DEBUG_ON(!inode || !S_ISDIR(inode->i_mode));
 
 	di_write_lock_child(dentry);
-	parent = dentry->d_parent;
+	parent = dget_parent(dentry);
 	di_read_lock_parent(parent, AUFS_I_RLOCK);
 	err = au_refresh_hdentry(dentry, S_IFDIR);
 	if (err >= 0) {
 		err = au_refresh_hinode(dentry);
 		if (!err)
-			au_reset_hinotify(dentry->d_inode, flags);
+			au_reset_hinotify(inode, flags);
 	}
 	if (unlikely(err))
 		Err("unrecoverable error %d\n", err);
 	di_read_unlock(parent, AUFS_I_RLOCK);
+	dput(parent);
 	di_write_unlock(dentry);
 
 	TraceErr(err);
 	return err;
 }
 
+static int test_dir(struct dentry *dentry, void *arg)
+{
+	return S_ISDIR(dentry->d_inode->i_mode);
+}
+
 static int refresh_dir(struct dentry *root, int sgen)
 {
-	int err;
-	struct dentry *this_parent = root;
-	struct list_head *next;
+	int err, i, j, ndentry;
 	struct super_block *sb = root->d_sb;
 	const unsigned int flags = au_hi_flags(root->d_inode, /*isdir*/1);
+	struct au_dcsub_pages dpages;
+	struct au_dpage *dpage;
+	struct dentry **dentries;
 
 	LKTRTrace("sgen %d\n", sgen);
 	SiMustWriteLock(sb);
 	DEBUG_ON(au_digen(root) != sgen);
 	DiMustWriteLock(root);
+
+	err = au_dpages_init(&dpages, GFP_KERNEL);
+	if (unlikely(err))
+		goto out;
+	err = au_dcsub_pages(&dpages, root, test_dir, NULL);
+	if (unlikely(err))
+		goto out_dpages;
+
 	DiMustNoWaiters(root);
 	IiMustNoWaiters(root->d_inode);
 	di_write_unlock(root);
-
-	err = 0;
-	//spin_lock(&dcache_lock);
- repeat:
-	next = this_parent->d_subdirs.next;
- resume:
-	if (this_parent->d_sb == sb
-	    && !IS_ROOT(this_parent)
-	    && this_parent->d_inode
-	    && S_ISDIR(this_parent->d_inode->i_mode)
-	    && au_digen(this_parent) != sgen) {
-		err = do_refresh_dir(this_parent, flags);
-		if (unlikely(err))
-			goto out;
-	}
-
-	while (next != &this_parent->d_subdirs) {
-		struct list_head *tmp = next;
-		struct dentry *dentry;
-
-		dentry = list_entry(tmp, struct dentry, D_CHILD);
-		next = tmp->next;
-		if (unlikely(d_unhashed(dentry) || !dentry->d_inode))
-			continue;
-		if (!list_empty(&dentry->d_subdirs)) {
-			this_parent = dentry;
-			goto repeat;
-		}
-		if (dentry->d_sb == sb
-		    && dentry->d_inode
-		    && S_ISDIR(dentry->d_inode->i_mode)) {
-			DEBUG_ON(IS_ROOT(dentry) || au_digen(dentry) == sgen);
-			err = do_refresh_dir(dentry, flags);
-			if (unlikely(err))
-				goto out;
+	for (i = 0; !err && i < dpages.ndpage; i++) {
+		dpage = dpages.dpages + i;
+		dentries = dpage->dentries;
+		ndentry = dpage->ndentry;
+		for (j = 0; !err && j < ndentry; j++) {
+			struct dentry *d;
+			d = dentries[j];
+			DEBUG_ON(!S_ISDIR(d->d_inode->i_mode)
+				 || au_digen(d->d_parent) != sgen);
+			if (au_digen(d) != sgen)
+				err = do_refresh_dir(d, flags);
 		}
 	}
-	if (this_parent != root) {
-		next = this_parent->D_CHILD.next;
-		this_parent = this_parent->d_parent;
-		goto resume;
-	}
-
- out:
 	di_write_lock_child(root); /* aufs_write_lock() calls ..._child() */
-	//spin_unlock(&dcache_lock);
+
+ out_dpages:
+	au_dpages_free(&dpages);
+ out:
 	TraceErr(err);
 	return err;
 }
 
-// stop extra interpretation of errno in mount(8), and strange error messages.
+/* stop extra interpretation of errno in mount(8), and strange error messages */
 static int cvt_err(int err)
 {
 	TraceErr(err);
@@ -387,9 +379,9 @@ static int aufs_remount_fs(struct super_block *sb, int *flags, char *data)
 	struct dentry *root;
 	struct inode *inode;
 	struct opts opts;
-	unsigned int given, prev;
+	unsigned int given, dlgt;
 
-	//atomic_inc(&aufs_cond);
+	//au_debug_on();
 	LKTRTrace("flags 0x%x, data %s, len %d\n",
 		  *flags, data ? data : "NULL", data ? strlen(data) : 0);
 
@@ -413,30 +405,10 @@ static int aufs_remount_fs(struct super_block *sb, int *flags, char *data)
 
 	root = sb->s_root;
 	inode = root->d_inode;
-	prev = au_flag_test(sb, AuMask_UDBA | AuFlag_DLGT);
-
-#if 0
-	/* disable hinotify temporary on root inode, before locking it. */
-	if (unlikely(prev & AuFlag_UDBA_INOTIFY)) {
-		aufs_write_lock(root);
-		udba_set(sb, AuFlag_UDBA_REVAL);
-		au_reset_hinotify(inode, au_hi_flags(inode, /*isdir*/1));
-		aufs_write_unlock(root);
-	}
-#endif
-
 	i_lock(inode);
 	aufs_write_lock(root);
 
-	/* disable it temporary */
-	au_flag_clr(sb, AuFlag_DLGT);
-
-#if 0
-	{
-		static DECLARE_WAIT_QUEUE_HEAD(wq);
-		wait_event_timeout(wq, 0, 3 * HZ);
-	}
-#endif
+	//DbgSleep(3);
 
 	/* au_do_opts() may return an error */
 	do_refresh = 0;
@@ -445,19 +417,12 @@ static int aufs_remount_fs(struct super_block *sb, int *flags, char *data)
 	//if (LktrCond) err = -1;
 	au_free_opts(&opts);
 
-#if 0
-	if (!(given & AuMask_UDBA)) {
-		udba_set(sb, prev & AuMask_UDBA);
-		do_refresh = 1;
-	}
-#endif
-	if (unlikely((prev & AuFlag_DLGT) && !(given & AuFlag_DLGT)))
-		au_flag_set(sb, AuFlag_DLGT);
-
 	if (do_refresh) {
 		int rerr;
 		struct aufs_sbinfo *sbinfo;
 
+		dlgt = au_flag_test(sb, AuFlag_DLGT);
+		au_flag_clr(sb, AuFlag_DLGT);
 		au_sigen_inc(sb);
 		au_reset_hinotify(inode, au_hi_flags(inode, /*isdir*/1));
 		sbinfo = stosi(sb);
@@ -469,19 +434,20 @@ static int aufs_remount_fs(struct super_block *sb, int *flags, char *data)
 			     rerr);
 		}
 		au_cpup_attr_all(inode);
+		au_flag_set(sb, dlgt);
 	}
 
-// out_unlock:
 	aufs_write_unlock(root);
 	i_unlock(inode);
 	if (do_refresh)
 		sysaufs_notify_remount();
+
  out_opts:
 	free_page((unsigned long)opts.opt);
  out:
 	err = cvt_err(err);
 	TraceErr(err);
-	//atomic_dec(&aufs_cond);
+	//au_debug_off();
 	return err;
 }
 
@@ -587,17 +553,18 @@ static int alloc_root(struct super_block *sb)
 	//if (LktrCond) {igrab(inode); dput(root); root = NULL;}
 	if (unlikely(!root))
 		goto out_iput;
-	if (!IS_ERR(root)) {
-		err = au_alloc_dinfo(root);
-		//if (LktrCond){rw_write_unlock(&dtodi(root)->di_rwsem);err=-1;}
-		if (!err) {
-			sb->s_root = root;
-			return 0; /* success */
-		}
-		dput(root);
-		goto out;
-	}
 	err = PTR_ERR(root);
+	if (IS_ERR(root))
+		goto out_iput;
+
+	err = au_alloc_dinfo(root);
+	//if (LktrCond){rw_write_unlock(&dtodi(root)->di_rwsem);err=-1;}
+	if (!err) {
+		sb->s_root = root;
+		return 0; /* success */
+	}
+	dput(root);
+	goto out; /* do not iput */
 
  out_iput:
 	iput(inode);
@@ -615,7 +582,7 @@ static int aufs_fill_super(struct super_block *sb, void *raw_data, int silent)
 	struct opts opts;
 	char *arg = raw_data;
 
-	//atomic_inc(&aufs_cond);
+	//au_debug_on();
 	if (unlikely(!arg || !*arg)) {
 		err = -EINVAL;
 		Err("no arg\n");
@@ -656,20 +623,20 @@ static int aufs_fill_super(struct super_block *sb, void *raw_data, int silent)
 	DiMustWriteLock(root);
 	inode = root->d_inode;
 	inode->i_nlink = 2;
-	// lock vfs_inode first, then aufs.
-	ii_write_lock_parent(inode);
-	aufs_write_unlock(root);
 
 	/*
 	 * actually we can parse options regardless aufs lock here.
 	 * but at remount time, parsing must be done before aufs lock.
 	 * so we follow the same rule.
 	 */
+	ii_write_lock_parent(inode);
+	aufs_write_unlock(root);
 	err = au_parse_opts(sb, arg, &opts);
 	//if (LktrCond) {au_free_opts(&opts); err = -1;}
 	if (unlikely(err))
 		goto out_root;
 
+	/* lock vfs_inode first, then aufs. */
 	i_lock(inode);
 	inode->i_op = &aufs_dir_iop;
 	inode->i_fop = &aufs_dir_fop;
@@ -683,11 +650,15 @@ static int aufs_fill_super(struct super_block *sb, void *raw_data, int silent)
 		goto out_unlock;
 	DEBUG_ON(!sb->s_maxbytes);
 
+#if 0
+	// extra ref for initramfs
+	dget(root); //dget(root); dget(root);
+#endif
 	//DbgDentry(root);
 	aufs_write_unlock(root);
-	add_sbilist(stosi(sb));
 	i_unlock(inode);
 	//DbgSb(sb);
+	add_sbilist(stosi(sb));
 	goto out_opts; /* success */
 
  out_unlock:
@@ -702,9 +673,10 @@ static int aufs_fill_super(struct super_block *sb, void *raw_data, int silent)
  out_opts:
 	free_page((unsigned long)opts.opt);
  out:
+	TraceErr(err);
 	err = cvt_err(err);
 	TraceErr(err);
-	//atomic_dec(&aufs_cond);
+	//au_debug_off();
 	return err;
 }
 

@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: inode.h,v 1.27 2007/04/02 01:13:38 sfjro Exp $ */
+/* $Id: inode.h,v 1.29 2007/04/23 00:56:57 sfjro Exp $ */
 
 #ifndef __AUFS_INODE_H__
 #define __AUFS_INODE_H__
@@ -140,6 +140,11 @@ static inline void i_unlock(struct inode *i)
 	up(&i->i_sem);
 }
 
+static inline int i_trylock(struct inode *i)
+{
+	return down_trylock(&i->i_sem);
+}
+
 static inline void hi_lock(struct inode *i, unsigned int lsc)
 {
 	i_lock(i);
@@ -158,6 +163,11 @@ static inline void i_lock(struct inode *i)
 static inline void i_unlock(struct inode *i)
 {
 	mutex_unlock(&i->i_mutex);
+}
+
+static inline int i_trylock(struct inode *i)
+{
+	return mutex_trylock(&i->i_mutex);
 }
 
 static inline void hi_lock(struct inode *i, unsigned int lsc)
@@ -201,7 +211,7 @@ void hdir_unlock_rename(struct dentry **h_parents, struct inode **dirs,
 			aufs_bindex_t bindex, int issamedir);
 void au_reset_hinotify(struct inode *inode, unsigned int flags);
 int __init au_inotify_init(void);
-void au_inotify_exit(void);
+void au_inotify_fin(void);
 #else
 static inline
 int alloc_hinotify(struct aufs_hinode *hinode, struct inode *inode,
@@ -248,7 +258,7 @@ static inline void au_reset_hinotify(struct inode *inode, unsigned int flags)
 }
 
 #define au_inotify_init()	0
-#define au_inotify_exit()	/* */
+#define au_inotify_fin()	/* */
 #endif /* CONFIG_AUFS_HINOTIFY */
 
 #define LockFunc(name, lsc) \
@@ -305,20 +315,7 @@ RWLockFuncs(new, NEW);
 #undef WriteLockFunc
 #undef RWLockFunc
 
-static inline void ii_read_unlock(struct inode *i)
-{
-	rw_read_unlock(&itoii(i)->ii_rwsem);
-}
-
-static inline void ii_downgrade_lock(struct inode *i)
-{
-	rw_dgrade_lock(&itoii(i)->ii_rwsem);
-}
-
-static inline void ii_write_unlock(struct inode *i)
-{
-	rw_write_unlock(&itoii(i)->ii_rwsem);
-}
+SimpleUnlockRwsemFuncs(ii, struct inode *i, itoii(i)->ii_rwsem);
 
 static inline void IiMustReadLock(struct inode *i)
 {

@@ -3,7 +3,7 @@
 .SH NAME
 diskless \- aufs sample for management of diskless machines
 
-.\" $Id: diskless.6aufs,v 1.3 2007/03/12 01:54:55 sfjro Exp $
+.\" $Id: diskless.6aufs,v 1.4 2007/04/16 01:19:18 sfjro Exp $
 
 .\" ----------------------------------------------------------------------
 .SH Introduction
@@ -218,7 +218,9 @@ installer. Probably you don't need to set DebInstaller in def.mk.
 .SH live cd on nfs, slax, knoppix and gentoo
 This sample also support slax, knoppix and gentoo cdrom on NFS. Slax
 and knoopix distributions already supported aufs and it is very easy
-to try them with NFS. Hers is simple instructions.
+to try them with NFS.
+Additonally, a sample for initramfs is included too.
+Hers is simple instructions.
 
 1. define the variables in def.mk, for slax, knoppix and gentoo
 
@@ -233,6 +235,11 @@ it will make the directory, and retrieve the cdrom image and the necessary
 kernel modules to the directory.
 
 5. boot up your diskless NFS client.
+type 'slax_rd' for pxe prompt if you want to boot slax using initrd.
+type 'slax_rfs' for pxe prompt if you want to boot slax using
+initramfs. Or try 'knoppix_rd', 'knoppix_rfs', 'gentoo_rd' or
+'gentoo_rfs.'
+
 
 .\" ----------------------------------------------------------------------
 .SH COPYRIGHT

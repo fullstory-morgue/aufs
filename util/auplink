@@ -16,7 +16,7 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
-# $Id: auplink,v 1.5 2007/04/09 02:48:18 sfjro Exp $
+# $Id: auplink,v 1.6 2007/04/16 01:19:49 sfjro Exp $
 
 #set -x
 tmp=/tmp/$$
@@ -61,7 +61,7 @@ Cpup()
 
 test $# -eq 2 || Usage
 cd "$1"
-mntpnt="$PWD"
+mntpnt=`readlink -f "$PWD"`
 cd "$OLDPWD"
 
 do_flush=0

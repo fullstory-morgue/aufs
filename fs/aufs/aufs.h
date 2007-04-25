@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: aufs.h,v 1.20 2007/03/27 12:53:23 sfjro Exp $ */
+/* $Id: aufs.h,v 1.21 2007/04/16 01:14:30 sfjro Exp $ */
 
 #ifndef __AUFS_H__
 #define __AUFS_H__
@@ -26,7 +26,7 @@
 /* ---------------------------------------------------------------------- */
 
 // limited support before 2.6.16, curretly 2.6.15 only.
-#if LINUX_VERSION_CODE == KERNEL_VERSION(2,6,15)
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,15)
 #define atomic_long_t		atomic_t
 #define atomic_long_set		atomic_set
 #define timespec_to_ns(ts)	({(long long)(ts)->tv_sec;})
@@ -69,6 +69,7 @@
 
 #include "branch.h"
 #include "cpup.h"
+#include "dcsub.h"
 #include "dentry.h"
 #include "dir.h"
 #include "file.h"

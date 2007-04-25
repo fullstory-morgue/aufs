@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: wkq.h,v 1.6 2007/03/27 12:48:27 sfjro Exp $ */
+/* $Id: wkq.h,v 1.7 2007/04/23 01:01:16 sfjro Exp $ */
 
 #ifndef __AUFS_WKQ_H__
 #define __AUFS_WKQ_H__
@@ -45,10 +45,28 @@ typedef void (*work_func_t)(void *arg);
 #define AuWkqFunc(name, arg)	void name(void *arg)
 #endif
 
-void wkq_wait(au_wkq_func_t func, void *args, int dlgt);
-void wkq_nowait(au_wkq_func_t func, void *args, int dlgt);
-int __init au_init_wkq(void);
-void au_fin_wkq(void);
+extern struct au_wkq *au_wkq;
+
+void au_wkq_run(au_wkq_func_t func, void *args, int dlgt, int do_wait);
+int __init au_wkq_init(void);
+void au_wkq_fin(void);
+
+/* ---------------------------------------------------------------------- */
+
+static inline int is_aufsd(struct task_struct *tsk)
+{
+	return (!tsk->mm && !strcmp(current->comm, AUFS_WKQ_NAME));
+}
+
+static inline void au_wkq_wait(au_wkq_func_t func, void *args, int dlgt)
+{
+	au_wkq_run(func, args, dlgt, /*do_wait*/1);
+}
+
+static inline void au_wkq_nowait(au_wkq_func_t func, void *args, int dlgt)
+{
+	au_wkq_run(func, args, dlgt, /*do_wait*/0);
+}
 
 #endif /* __KERNEL__ */
 #endif /* __AUFS_WKQ_H__ */

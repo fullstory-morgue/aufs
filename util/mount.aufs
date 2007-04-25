@@ -16,7 +16,7 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
-# $Id: mount.aufs,v 1.14 2007/03/12 01:54:26 sfjro Exp $
+# $Id: mount.aufs,v 1.15 2007/04/16 01:19:49 sfjro Exp $
 
 #
 # The main purpose of this script is updating /etc/mtab and calling auplilnk.
@@ -60,7 +60,7 @@ verbose=0
 dev="$1"
 e_dev=`echo "$dev" | conv escape`
 cd "$2"
-mntpnt="$PWD"
+mntpnt=`readlink -f "$PWD"`
 e_mntpnt=`echo "$mntpnt" | conv escape`
 cd "$OLDPWD"
 shift 2

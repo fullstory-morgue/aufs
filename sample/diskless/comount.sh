@@ -18,7 +18,7 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
-# $Id: comount.sh,v 1.4 2007/04/09 02:47:11 sfjro Exp $
+# $Id: comount.sh,v 1.6 2007/04/23 00:59:51 sfjro Exp $
 
 set -ex
 tmp=/tmp/$$
@@ -91,6 +91,7 @@ nfscd() # slax | knoppix | gentoo | edgy
 
 	mount -t tmpfs none /branch/$HOSTNAME
 	opts="nowarn_perm,rdcache=${Timeout},udba=none,br:/branch/$HOSTNAME"
+	#opts="nowarn_perm,udba=none,br:/branch/$HOSTNAME"
 	d=/branch/$1/kmod
 	test -d $d && opts="${opts}:$d"
 	mount -n -t aufs -o ${opts} aufsroot aufs
@@ -120,6 +121,9 @@ slax()
 	/bin/mount -n -o remount,warn_perm aufsroot /aufs
 
 	cd /aufs
+	for i in lktr lktr_exec
+	do test -e /$i && cp -p /$i .
+	done
 	chroot . usr/sbin/useradd -m jro
 	chroot . passwd -d jro
 	echo 'S0:12345:respawn:/sbin/agetty -L ttyS0 115200 vt100' >> ./etc/inittab
@@ -148,7 +152,9 @@ slax()
 	test  -x $f && chmod a-x $f
 	done
 
+	{ cd / && tar -cf - dev; } | tar -xf -
 	cat <<- EOF >> etc/rc.d/rc.local
+	echo 8 > /proc/sys/kernel/printk
 	{ cd /initrd && tar -cf - dev; } | tar -xmf -
 	chmod a+w /dev/null
 	seq 0 7 | while read i
@@ -190,7 +196,14 @@ knoppix()
 	echo aufsroot / aufs rw 0 0
 	echo none /dev/shm tmpfs defaults,noauto,size=1m 0 0
 	} > etc/fstab
+
+	if [ "$initrd" = "initramfs.gz" ]
+	then
+	sed -e 's/id:5:initdefault/id:2:initdefault/' ./etc/inittab > $tmp
+	mv $tmp ./etc/inittab
+	fi
 	echo 'S0:12345:respawn:/bin/bash -login < /dev/ttyS0 > /dev/ttyS0 2>&1' >> ./etc/inittab
+
 	case $HOSTNAME in
 	jrous)
 		f=./etc/rcS.d/S99nfscd

@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: cpup.c,v 1.32 2007/03/27 12:51:43 sfjro Exp $ */
+/* $Id: cpup.c,v 1.34 2007/04/23 00:55:05 sfjro Exp $ */
 
 #include <asm/uaccess.h>
 #include "aufs.h"
@@ -30,6 +30,7 @@ void au_cpup_attr_timesizes(struct inode *inode)
 	//IMustLock(inode);
 	hidden_inode = au_h_iptr(inode);
 	DEBUG_ON(!hidden_inode);
+	//IMustLock(!hidden_inode);
 
 	inode->i_atime = hidden_inode->i_atime;
 	inode->i_mtime = hidden_inode->i_mtime;
@@ -529,7 +530,7 @@ int sio_cpup_single(struct dentry *dentry, aufs_bindex_t bdst,
 			.len	= len,
 			.flags	= flags
 		};
-		wkq_wait(call_cpup_single, &args, /*dlgt*/0);
+		au_wkq_wait(call_cpup_single, &args, /*dlgt*/0);
 	}
 
 	TraceErr(err);
@@ -616,7 +617,7 @@ int sio_cpup_simple(struct dentry *dentry, aufs_bindex_t bdst, loff_t len,
 			.len	= len,
 			.flags	= flags
 		};
-		wkq_wait(call_cpup_simple, &args, /*dlgt*/0);
+		au_wkq_wait(call_cpup_simple, &args, /*dlgt*/0);
 	}
 
 	TraceErr(err);

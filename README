@@ -2,7 +2,7 @@
 Aufs -- Another Unionfs
 Junjiro Okajima
 
-# $Id: README,v 1.43 2007/04/02 01:14:31 sfjro Exp $
+# $Id: README,v 1.45 2007/04/23 00:59:50 sfjro Exp $
 
 
 0. Introduction
@@ -51,19 +51,20 @@ Also there are many enhancements in aufs, such like,,,
 - default permission flags for branches
 - selectable permission flags for ro branch, whether whiteout can
   exist or not
+- export via NFS.
+- <sysfs>/fs/aufs.
 - and more... see aufs manual in detail
 
 Aufs is in still development stage, especially,,,
 - pseudo hardlink (hardlink over branches)
 - allow a direct access manually to a file on branch, e.g. bypassing aufs.
   including NFS or remote filesystem branch.
-- export via NFS.
-- /sys/fs/aufs.
 
 (current work)
 - lockdep
-- support Linux Security Modules (LSM) and a delegation of the
-  internal branch access, mainly for Suse AppArmor.
+- a delegation of the internal branch access to support task I/O
+  accounting, which also supports Linux Security Modules (LSM) mainly
+  for Suse AppArmor.
 - nested mount, i.e. aufs as readonly no-whiteout branch of another aufs.
 
 (just an idea)
@@ -173,9 +174,10 @@ not affected, but the same named file will be newly created under
 /tmp/rw. And all of your modification to the file will be applied to
 the one under /tmp/rw. This is called Copy on Write (COW) method.
 Aufs mount options are described in the generated ./aufs.5.
+
 Additionally, there are some sample usages of aufs which are a
 diskless system with network booting, and LiveCD over NFS.
-See ./sample in detail.
+See ./sample/diskless in detail.
 
 
 5. Contact

@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: i_op_add.c,v 1.35 2007/04/09 02:45:36 sfjro Exp $ */
+/* $Id: i_op_add.c,v 1.36 2007/04/16 01:17:21 sfjro Exp $ */
 
 //#include <linux/fs.h>
 //#include <linux/namei.h>
@@ -407,6 +407,8 @@ int aufs_link(struct dentry *src_dentry, struct inode *dir,
 	err = 0;
 	sb = dentry->d_sb;
 	a.dlgt = need_dlgt(sb);
+
+	//todo: minor optimize, their sb may be same while their bindex differs.
 	a.bsrc = dbstart(src_dentry);
 	a.bdst = dbstart(dentry);
 	hidden_src_dentry = au_h_dptr(src_dentry);

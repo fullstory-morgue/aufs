@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: wkq.c,v 1.10 2007/04/09 02:47:56 sfjro Exp $ */
+/* $Id: wkq.c,v 1.12 2007/04/23 00:58:37 sfjro Exp $ */
 
 #include "aufs.h"
 
@@ -62,7 +62,7 @@ static void cred_store(struct au_cred *cred)
 
 static void cred_revert(struct au_cred *cred)
 {
-	DEBUG_ON(!au_is_kthread(current));
+	DEBUG_ON(!is_aufsd(current));
 	current->fsuid = cred->fsuid;
 	current->fsgid = cred->fsgid;
 	current->cap_effective = cred->cap_effective;
@@ -97,7 +97,10 @@ static int enqueue(struct au_wkq *wkq, struct au_wkinfo *wkinfo)
 {
 	wkinfo->busyp = &wkq->busy;
 	update_busy(wkq, wkinfo);
-	return !queue_work(wkq->q, &wkinfo->wk);
+	if (wkinfo->wait)
+		return !queue_work(wkq->q, &wkinfo->wk);
+	else
+		return !schedule_work(&wkinfo->wk);
 }
 
 static void do_wkq(struct au_wkinfo *wkinfo)
@@ -108,19 +111,22 @@ static void do_wkq(struct au_wkinfo *wkinfo)
 	TraceEnter();
 
 	while (1) {
-		idle_idx = 0;
-		idle = UINT_MAX;
-		for (i = 0; i < aufs_nwkq; i++) {
-			n = atomic_inc_return(&au_wkq[i].busy);
-			if (n == 1 && !enqueue(au_wkq + i, wkinfo))
-				return; /* success */
+		if (wkinfo->wait) {
+			idle_idx = 0;
+			idle = UINT_MAX;
+			for (i = 0; i < aufs_nwkq; i++) {
+				n = atomic_inc_return(&au_wkq[i].busy);
+				if (n == 1 && !enqueue(au_wkq + i, wkinfo))
+					return; /* success */
 
-			if (n < idle) {
-				idle_idx = i;
-				idle = n;
+				if (n < idle) {
+					idle_idx = i;
+					idle = n;
+				}
+				atomic_dec(&au_wkq[i].busy);
 			}
-			atomic_dec(&au_wkq[i].busy);
-		}
+		} else
+			idle_idx = aufs_nwkq;
 
 		atomic_inc(&au_wkq[idle_idx].busy);
 		if (!enqueue(au_wkq + idle_idx, wkinfo))
@@ -136,6 +142,9 @@ static AuWkqFunc(wkq_func, wk)
 {
 	struct au_wkinfo *wkinfo = container_of(wk, struct au_wkinfo, wk);
 
+	LKTRTrace("wkinfo{%u, %u, %p, %p, %p}\n",
+		  wkinfo->wait, wkinfo->dlgt, wkinfo->func, wkinfo->busyp,
+		  wkinfo->comp);
 #ifdef CONFIG_AUFS_DLGT
 	if (!wkinfo->dlgt)
 		wkinfo->func(wkinfo->args);
@@ -148,65 +157,52 @@ static AuWkqFunc(wkq_func, wk)
 #else
 	wkinfo->func(wkinfo->args);
 #endif
-	//atomic_dec(wkinfo->busyp);
-	if (wkinfo->wait) {
-		atomic_dec(wkinfo->busyp);
+	atomic_dec(wkinfo->busyp);
+	if (wkinfo->wait)
 		complete(wkinfo->comp);
-	} else
+	else
 		kfree(wkinfo);
 }
 
-void wkq_wait(au_wkq_func_t func, void *args, int dlgt)
+void au_wkq_run(au_wkq_func_t func, void *args, int dlgt, int do_wait)
 {
 	DECLARE_COMPLETION_ONSTACK(comp);
-	struct au_wkinfo wkinfo = {
+	struct au_wkinfo _wkinfo = {
 		.wait	= 1,
 		.dlgt	= !!dlgt,
 		.func	= func,
 		.args	= args,
 		.comp	= &comp
-	};
+	}, *wkinfo = &_wkinfo;
 
-	LKTRTrace("dlgt %d\n", dlgt);
-	DEBUG_ON(au_is_kthread(current));
+	LKTRTrace("dlgt %d, do_wait %d\n", dlgt, do_wait);
+	DEBUG_ON(is_aufsd(current));
 
-	AuInitWkq(&wkinfo.wk, wkq_func);
-#ifdef CONFIG_AUFS_DLGT
-	if (dlgt)
-		cred_store(&wkinfo.cred);
-#endif
-	do_wkq(&wkinfo);
-	wait_for_completion(wkinfo.comp);
-}
-
-void wkq_nowait(au_wkq_func_t func, void *args, int dlgt)
-{
-	struct au_wkinfo *wkinfo;
-	static DECLARE_WAIT_QUEUE_HEAD(wq);
-
-	LKTRTrace("dlgt %d\n", dlgt);
-
-	/*
-	 * wkq_func() must free this wkinfo.
-	 * it highly depends upon the implementation of workqueue.
-	 */
-	wait_event(wq, (wkinfo = kmalloc(sizeof(*wkinfo), GFP_KERNEL)));
-	wkinfo->wait = 0;
-	wkinfo->dlgt = !!dlgt;
-	wkinfo->func = func;
-	wkinfo->args = args;
-	wkinfo->comp = NULL;
+	if (unlikely(!do_wait)) {
+		static DECLARE_WAIT_QUEUE_HEAD(wq);
+		/*
+		 * wkq_func() must free this wkinfo.
+		 * it highly depends upon the implementation of workqueue.
+		 */
+		wait_event(wq, (wkinfo = kmalloc(sizeof(*wkinfo), GFP_KERNEL)));
+		wkinfo->wait = 0;
+		wkinfo->dlgt = !!dlgt;
+		wkinfo->func = func;
+		wkinfo->args = args;
+		wkinfo->comp = NULL;
+	}
 
 	AuInitWkq(&wkinfo->wk, wkq_func);
 #ifdef CONFIG_AUFS_DLGT
 	if (dlgt)
 		cred_store(&wkinfo->cred);
 #endif
-	schedule_work(&wkinfo->wk);
-	//do_wkq(wkinfo);
+	do_wkq(wkinfo);
+	if (do_wait)
+		wait_for_completion(wkinfo->comp);
 }
 
-void au_fin_wkq(void)
+void au_wkq_fin(void)
 {
 	int i;
 
@@ -218,14 +214,16 @@ void au_fin_wkq(void)
 	kfree(au_wkq);
 }
 
-int __init au_init_wkq(void)
+int __init au_wkq_init(void)
 {
 	int err, i;
+	struct au_wkq *nowaitq;
 
 	LKTRTrace("%d\n", aufs_nwkq);
 
+	/* '+1' is for accounting  of nowait queue */
 	err = -ENOMEM;
-	au_wkq = kcalloc(aufs_nwkq, sizeof(*au_wkq), GFP_KERNEL);
+	au_wkq = kcalloc(aufs_nwkq + 1, sizeof(*au_wkq), GFP_KERNEL);
 	if (unlikely(!au_wkq))
 		goto out;
 
@@ -239,20 +237,30 @@ int __init au_init_wkq(void)
 		}
 
 		err = PTR_ERR(au_wkq[i].q);
-		au_fin_wkq();
+		au_wkq_fin();
 		break;
 	}
 
-#if 0
+	/* nowait accounting */
+	nowaitq = au_wkq + aufs_nwkq;
+	atomic_set(&nowaitq->busy, 0);
+	nowaitq->max_busy = 0;
+	nowaitq->q = NULL;
+
+#if 0 // test accouting
 	if (!err) {
-		static DECLARE_WAIT_QUEUE_HEAD(wq);
 		static void f(void *args) {
-			Dbg("sleep 3\n");
-			//wait_event_timeout(wq, 0, 3 * HZ);
+			DbgSleep(1);
 		}
 		int i;
+		//au_debug_on();
+		LKTRTrace("f %p\n", f);
 		for (i = 0; i < 10; i++)
-			wkq_nowait(f, NULL, 0);
+			au_wkq_nowait(f, NULL, 0);
+		for (i = 0; i < aufs_nwkq; i++)
+			au_wkq_wait(f, NULL, 0);
+		DbgSleep(11);
+		//au_debug_off();
 	}
 #endif
 

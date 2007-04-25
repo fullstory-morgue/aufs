@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: i_op_ren.c,v 1.33 2007/04/09 02:45:36 sfjro Exp $ */
+/* $Id: i_op_ren.c,v 1.35 2007/04/23 00:56:45 sfjro Exp $ */
 
 //#include <linux/fs.h>
 //#include <linux/namei.h>
@@ -34,7 +34,7 @@ struct rename_args {
 	unsigned int whsrc:1;
 	unsigned int whdst:1;
 	unsigned int dlgt:1;
-};
+} __attribute__((aligned(sizeof(long))));
 
 static int do_rename(struct inode *src_dir, struct dentry *src_dentry,
 		     struct inode *dir, struct dentry *dentry,
@@ -130,6 +130,18 @@ static int do_rename(struct inode *src_dir, struct dentry *src_dentry,
 		if (unlikely(err))
 			goto out_whtmp;
 	}
+
+#if 0
+	/* clear the target ino in xino */
+	LKTRTrace("dir %d, dst inode %p\n", a->isdir, a->hidden_dentry[DST]->d_inode);
+	if (a->isdir && a->hidden_dentry[DST]->d_inode) {
+		Dbg("here\n");
+		err = xino_write(a->sb, a->btgt,
+				 a->hidden_dentry[DST]->d_inode->i_ino, 0);
+		if (unlikely(err))
+			goto out_whtmp;
+	}
+#endif
 
 	/* rename by vfs_rename or cpup */
 	need_diropq = a->isdir
@@ -371,11 +383,14 @@ static int may_rename_srcdir(struct dentry *dentry, aufs_bindex_t btgt)
 
 	bstart = dbstart(dentry);
 	if (bstart != btgt) {
-		struct aufs_nhash whlist;
+		struct aufs_nhash *whlist;
 
-		init_nhash(&whlist);
-		err = test_empty(dentry, &whlist);
-		free_nhash(&whlist);
+		whlist = nhash_new(GFP_KERNEL);
+		err = PTR_ERR(whlist);
+		if (IS_ERR(whlist))
+			goto out;
+		err = test_empty(dentry, whlist);
+		nhash_del(whlist);
 		goto out;
 	}
 
@@ -398,8 +413,11 @@ int aufs_rename(struct inode *src_dir, struct dentry *src_dentry,
 	aufs_bindex_t bend, bindex;
 	struct inode *inode, *dirs[2];
 	enum {PARENT, CHILD};
-	struct dtime dt[2][2];
-	struct rename_args a;
+	/* reduce stack space */
+	struct {
+		struct rename_args a;
+		struct dtime dt[2][2];
+	} *p;
 
 	LKTRTrace("i%lu, %.*s, i%lu, %.*s\n",
 		  src_dir->i_ino, DLNPair(src_dentry),
@@ -409,108 +427,118 @@ int aufs_rename(struct inode *src_dir, struct dentry *src_dentry,
 	if (dentry->d_inode)
 		IMustLock(dentry->d_inode);
 
-	a.sb = src_dentry->d_sb;
-	inode = src_dentry->d_inode;
-	a.isdir = !!S_ISDIR(inode->i_mode);
-	if (unlikely(a.isdir && dentry->d_inode
-		     && !S_ISDIR(dentry->d_inode->i_mode)))
-		return -ENOTDIR;
+	err = -ENOMEM;
+	BUILD_BUG_ON(sizeof(*p) > PAGE_SIZE);
+	p = kmalloc(sizeof(*p), GFP_KERNEL);
+	if (unlikely(!p))
+		goto out;
 
-	aufs_read_and_write_lock2(dentry, src_dentry, a.isdir);
-	a.dlgt = !!need_dlgt(a.sb);
-	a.parent[SRC] = a.parent[DST] = dentry->d_parent;
-	a.issamedir = (src_dir == dir);
-	if (a.issamedir)
-		di_write_lock_parent(a.parent[DST]);
+	err = -ENOTDIR;
+	p->a.sb = src_dentry->d_sb;
+	inode = src_dentry->d_inode;
+	p->a.isdir = !!S_ISDIR(inode->i_mode);
+	if (unlikely(p->a.isdir && dentry->d_inode
+		     && !S_ISDIR(dentry->d_inode->i_mode)))
+		goto out_free;
+
+	aufs_read_and_write_lock2(dentry, src_dentry, p->a.isdir);
+	p->a.dlgt = !!need_dlgt(p->a.sb);
+	p->a.parent[SRC] = p->a.parent[DST] = dentry->d_parent;
+	p->a.issamedir = (src_dir == dir);
+	if (p->a.issamedir)
+		di_write_lock_parent(p->a.parent[DST]);
 	else {
-		a.parent[SRC] = src_dentry->d_parent;
-		di_write_lock2_parent(a.parent[SRC], a.parent[DST], /*isdir*/1);
+		p->a.parent[SRC] = src_dentry->d_parent;
+		di_write_lock2_parent(p->a.parent[SRC], p->a.parent[DST],
+				      /*isdir*/1);
 	}
 
 	/* which branch we process */
-	a.bstart[DST] = dbstart(dentry);
-	a.btgt = err = wr_dir(dentry, 1, src_dentry, /*force_btgt*/-1,
+	p->a.bstart[DST] = dbstart(dentry);
+	p->a.btgt = err = wr_dir(dentry, 1, src_dentry, /*force_btgt*/-1,
 			      /*do_lock_srcdir*/0);
 	if (unlikely(err < 0))
-		goto out;
+		goto out_unlock;
 
 	/* are they available to be renamed */
 	err = 0;
-	init_nhash(&a.whlist);
-	if (a.isdir && dentry->d_inode) {
-		set_dbstart(dentry, a.bstart[DST]);
-		err = may_rename_dstdir(dentry, a.btgt, &a.whlist);
-		set_dbstart(dentry, a.btgt);
+	nhash_init(&p->a.whlist);
+	if (p->a.isdir && dentry->d_inode) {
+		set_dbstart(dentry, p->a.bstart[DST]);
+		err = may_rename_dstdir(dentry, p->a.btgt, &p->a.whlist);
+		set_dbstart(dentry, p->a.btgt);
 	}
-	a.hidden_dentry[DST] = au_h_dptr(dentry);
+	p->a.hidden_dentry[DST] = au_h_dptr(dentry);
 	if (unlikely(err))
-		goto out;
-	a.bstart[SRC] = dbstart(src_dentry);
-	a.hidden_dentry[SRC] = au_h_dptr(src_dentry);
-	if (a.isdir) {
-		err = may_rename_srcdir(src_dentry, a.btgt);
+		goto out_unlock;
+	//todo: minor optimize, their sb may be same while their bindex differs.
+	p->a.bstart[SRC] = dbstart(src_dentry);
+	p->a.hidden_dentry[SRC] = au_h_dptr(src_dentry);
+	if (p->a.isdir) {
+		err = may_rename_srcdir(src_dentry, p->a.btgt);
 		if (unlikely(err))
 			goto out_children;
 	}
 
 	/* prepare the writable parent dir on the same branch */
-	err = wr_dir_need_wh(src_dentry, a.isdir, &a.btgt,
-			     a.issamedir ? NULL : a.parent[DST]);
+	err = wr_dir_need_wh(src_dentry, p->a.isdir, &p->a.btgt,
+			     p->a.issamedir ? NULL : p->a.parent[DST]);
 	if (unlikely(err < 0))
 		goto out_children;
-	a.whsrc = !!err;
-	a.whdst = (a.bstart[DST] == a.btgt);
-	if (!a.whdst) {
-		err = cpup_dirs(dentry, a.btgt,
-				a.issamedir ? NULL : a.parent[SRC]);
+	p->a.whsrc = !!err;
+	p->a.whdst = (p->a.bstart[DST] == p->a.btgt);
+	if (!p->a.whdst) {
+		err = cpup_dirs(dentry, p->a.btgt,
+				p->a.issamedir ? NULL : p->a.parent[SRC]);
 		if (unlikely(err))
 			goto out_children;
 	}
 
-	a.hidden_parent[SRC] = au_h_dptr_i(a.parent[SRC], a.btgt);
-	a.hidden_parent[DST] = au_h_dptr_i(a.parent[DST], a.btgt);
+	p->a.hidden_parent[SRC] = au_h_dptr_i(p->a.parent[SRC], p->a.btgt);
+	p->a.hidden_parent[DST] = au_h_dptr_i(p->a.parent[DST], p->a.btgt);
 	dirs[0] = src_dir;
 	dirs[1] = dir;
-	hdir_lock_rename(a.hidden_parent, dirs, a.btgt, a.issamedir);
+	hdir_lock_rename(p->a.hidden_parent, dirs, p->a.btgt, p->a.issamedir);
 
 	/* store timestamps to be revertible */
-	dtime_store(dt[PARENT] + SRC, a.parent[SRC], a.hidden_parent[SRC]);
-	if (!a.issamedir)
-		dtime_store(dt[PARENT] + DST, a.parent[DST],
-			    a.hidden_parent[DST]);
+	dtime_store(p->dt[PARENT] + SRC, p->a.parent[SRC],
+		    p->a.hidden_parent[SRC]);
+	if (!p->a.issamedir)
+		dtime_store(p->dt[PARENT] + DST, p->a.parent[DST],
+			    p->a.hidden_parent[DST]);
 	do_dt_dstdir = 0;
-	if (a.isdir) {
-		dtime_store(dt[CHILD] + SRC, src_dentry,
-			    a.hidden_dentry[SRC]);
-		if (a.hidden_dentry[DST]->d_inode) {
+	if (p->a.isdir) {
+		dtime_store(p->dt[CHILD] + SRC, src_dentry,
+			    p->a.hidden_dentry[SRC]);
+		if (p->a.hidden_dentry[DST]->d_inode) {
 			do_dt_dstdir = 1;
-			dtime_store(dt[CHILD] + DST, dentry,
-				    a.hidden_dentry[DST]);
+			dtime_store(p->dt[CHILD] + DST, dentry,
+				    p->a.hidden_dentry[DST]);
 		}
 	}
 
-	err = do_rename(src_dir, src_dentry, dir, dentry, &a);
+	err = do_rename(src_dir, src_dentry, dir, dentry, &p->a);
 	if (unlikely(err))
 		goto out_dt;
-	hdir_unlock_rename(a.hidden_parent, dirs, a.btgt, a.issamedir);
+	hdir_unlock_rename(p->a.hidden_parent, dirs, p->a.btgt, p->a.issamedir);
 
 	/* update dir attributes */
 	dir->i_version++;
-	if (a.isdir)
+	if (p->a.isdir)
 		au_cpup_attr_nlink(dir);
-	if (ibstart(dir) == a.btgt)
+	if (ibstart(dir) == p->a.btgt)
 		au_cpup_attr_timesizes(dir);
 
-	if (!a.issamedir) {
+	if (!p->a.issamedir) {
 		src_dir->i_version++;
-		if (a.isdir)
+		if (p->a.isdir)
 			au_cpup_attr_nlink(src_dir);
-		if (ibstart(src_dir) == a.btgt)
+		if (ibstart(src_dir) == p->a.btgt)
 			au_cpup_attr_timesizes(src_dir);
 	}
 
 	// is this updating defined in POSIX?
-	if (unlikely(a.isdir)) {
+	if (unlikely(p->a.isdir)) {
 		//i_lock(inode);
 		au_cpup_attr_timesizes(inode);
 		//i_unlock(inode);
@@ -519,59 +547,63 @@ int aufs_rename(struct inode *src_dir, struct dentry *src_dentry,
 	/* dput/iput all lower dentries */
 	set_dbwh(src_dentry, -1);
 	bend = dbend(src_dentry);
-	for (bindex = a.btgt + 1; bindex <= bend; bindex++) {
+	for (bindex = p->a.btgt + 1; bindex <= bend; bindex++) {
 		struct dentry *hd;
 		hd = au_h_dptr_i(src_dentry, bindex);
 		if (hd)
 			set_h_dptr(src_dentry, bindex, NULL);
 	}
-	set_dbend(src_dentry, a.btgt);
+	set_dbend(src_dentry, p->a.btgt);
 
 	bend = ibend(inode);
-	for (bindex = a.btgt + 1; bindex <= bend; bindex++) {
+	for (bindex = p->a.btgt + 1; bindex <= bend; bindex++) {
 		struct inode *hi;
 		hi = au_h_iptr_i(inode, bindex);
 		if (hi)
 			set_h_iptr(inode, bindex, NULL, 0);
 	}
-	set_ibend(inode, a.btgt);
+	set_ibend(inode, p->a.btgt);
 	goto out_children; /* success */
 
  out_dt:
-	dtime_revert(dt[PARENT] + SRC,
-		     a.hidden_parent[SRC]->d_parent == a.hidden_parent[DST]);
-	if (!a.issamedir)
-		dtime_revert(dt[PARENT] + DST,
-			     a.hidden_parent[DST]->d_parent
-			     == a.hidden_parent[SRC]);
-	if (a.isdir && err != -EIO) {
+	dtime_revert(p->dt[PARENT] + SRC,
+		     p->a.hidden_parent[SRC]->d_parent
+		     == p->a.hidden_parent[DST]);
+	if (!p->a.issamedir)
+		dtime_revert(p->dt[PARENT] + DST,
+			     p->a.hidden_parent[DST]->d_parent
+			     == p->a.hidden_parent[SRC]);
+	if (p->a.isdir && err != -EIO) {
 		struct dentry *hd;
 
-		hd = dt[CHILD][SRC].dt_h_dentry;
+		hd = p->dt[CHILD][SRC].dt_h_dentry;
 		hi_lock_child(hd->d_inode);
-		dtime_revert(dt[CHILD] + SRC, 1);
+		dtime_revert(p->dt[CHILD] + SRC, 1);
 		i_unlock(hd->d_inode);
 		if (do_dt_dstdir) {
-			hd = dt[CHILD][DST].dt_h_dentry;
+			hd = p->dt[CHILD][DST].dt_h_dentry;
 			hi_lock_child(hd->d_inode);
-			dtime_revert(dt[CHILD] + DST, 1);
+			dtime_revert(p->dt[CHILD] + DST, 1);
 			i_unlock(hd->d_inode);
 		}
 	}
-	hdir_unlock_rename(a.hidden_parent, dirs, a.btgt, a.issamedir);
+	hdir_unlock_rename(p->a.hidden_parent, dirs, p->a.btgt, p->a.issamedir);
  out_children:
-	free_nhash(&a.whlist);
- out:
-	//if (unlikely(err /* && a.isdir */)) {
-	if (unlikely(err && a.isdir)) {
+	nhash_fin(&p->a.whlist);
+ out_unlock:
+	//if (unlikely(err /* && p->a.isdir */)) {
+	if (unlikely(err && p->a.isdir)) {
 		au_update_dbstart(dentry);
 		d_drop(dentry);
 	}
-	if (a.issamedir)
-		di_write_unlock(a.parent[DST]);
+	if (p->a.issamedir)
+		di_write_unlock(p->a.parent[DST]);
 	else
-		di_write_unlock2(a.parent[SRC], a.parent[DST]);
+		di_write_unlock2(p->a.parent[SRC], p->a.parent[DST]);
 	aufs_read_and_write_unlock2(dentry, src_dentry);
+ out_free:
+	kfree(p);
+ out:
 	TraceErr(err);
 	return err;
 }

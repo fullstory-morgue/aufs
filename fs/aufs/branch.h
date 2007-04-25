@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: branch.h,v 1.27 2007/04/09 02:44:32 sfjro Exp $ */
+/* $Id: branch.h,v 1.28 2007/04/16 01:14:58 sfjro Exp $ */
 
 #ifndef __AUFS_BRANCH_H__
 #define __AUFS_BRANCH_H__
@@ -208,25 +208,7 @@ struct vfsmount *au_nfsmnt(struct super_block *sb, aufs_bindex_t bindex)
 
 /* ---------------------------------------------------------------------- */
 
-static inline void br_wh_read_lock(struct aufs_branch *br)
-{
-	rw_read_lock(&br->br_wh_rwsem);
-}
-
-static inline void br_wh_read_unlock(struct aufs_branch *br)
-{
-	rw_read_unlock(&br->br_wh_rwsem);
-}
-
-static inline void br_wh_write_lock(struct aufs_branch *br)
-{
-	rw_write_lock(&br->br_wh_rwsem);
-}
-
-static inline void br_wh_write_unlock(struct aufs_branch *br)
-{
-	rw_write_unlock(&br->br_wh_rwsem);
-}
+SimpleRwsemFuncs(br_wh, struct aufs_branch *br, br->br_wh_rwsem);
 
 static inline void BrWhMustReadLock(struct aufs_branch *br)
 {

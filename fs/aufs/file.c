@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: file.c,v 1.37 2007/04/09 02:45:10 sfjro Exp $ */
+/* $Id: file.c,v 1.39 2007/04/23 00:56:06 sfjro Exp $ */
 
 //#include <linux/fsnotify.h>
 #include <linux/pagemap.h>
@@ -59,20 +59,15 @@ struct file *hidden_open(struct dentry *dentry, aufs_bindex_t bindex, int flags)
 
 	br = stobr(sb, bindex);
 	br_get(br);
+	/* drop flags for writing */
 	if (test_ro(sb, bindex, dentry->d_inode))
-		/* drop flags for writing */
 		flags = au_file_roflags(flags);
 	flags &= ~O_CREAT;
 	spin_lock(&hidden_inode->i_lock);
 	old_size = i_size_read(hidden_inode);
 	spin_unlock(&hidden_inode->i_lock);
 
-#if 0 //debugging
-	{
-		static DECLARE_WAIT_QUEUE_HEAD(wq);
-		wait_event_timeout(wq, 0, 3 * HZ);
-	}
-#endif
+	//DbgSleep(3);
 
 	dget(hidden_dentry);
 	hidden_mnt = mntget(br->br_mnt);
@@ -414,7 +409,7 @@ int au_ready_to_write(struct file *file, loff_t len)
 				.bdst	= bcpup,
 				.len	= len
 			};
-			wkq_wait(call_cpup_wh_file, &args, /*dlgt*/0);
+			au_wkq_wait(call_cpup_wh_file, &args, /*dlgt*/0);
 		}
 		//if (LktrCond) err = -1;
 		TraceErr(err);
@@ -451,7 +446,7 @@ static int refresh_file(struct file *file, int (*reopen)(struct file *file))
 {
 	int err, new_sz;
 	struct dentry *dentry;
-	aufs_bindex_t bend, bindex, bstart;
+	aufs_bindex_t bend, bindex, bstart, brid;
 	struct aufs_hfile *p;
 	struct aufs_finfo *finfo;
 	struct super_block *sb;
@@ -464,6 +459,10 @@ static int refresh_file(struct file *file, int (*reopen)(struct file *file))
 	DiMustReadLock(dentry);
 	inode = dentry->d_inode;
 	IiMustReadLock(inode);
+	//au_debug_on();
+	//DbgDentry(dentry);
+	//DbgFile(file);
+	//au_debug_off();
 
 	err = -ENOMEM;
 	sb = dentry->d_sb;
@@ -472,7 +471,7 @@ static int refresh_file(struct file *file, int (*reopen)(struct file *file))
 	bend = finfo->fi_bstart;
 	new_sz = sizeof(*finfo->fi_hfile) * (sbend(sb) + 1);
 	p = au_kzrealloc(finfo->fi_hfile, sizeof(*p) * (finfo->fi_bend + 1),
-			 new_sz);
+			 new_sz, GFP_KERNEL);
 	//p = NULL;
 	if (unlikely(!p))
 		goto out;
@@ -480,6 +479,7 @@ static int refresh_file(struct file *file, int (*reopen)(struct file *file))
 	hidden_file = p[0 + bstart].hf_file;
 
 	p = finfo->fi_hfile + finfo->fi_bstart;
+	brid = p->hf_br->br_id;
 	bend = finfo->fi_bend;
 	for (bindex = finfo->fi_bstart; bindex <= bend; bindex++, p++) {
 		struct aufs_hfile tmp, *q;
@@ -505,18 +505,53 @@ static int refresh_file(struct file *file, int (*reopen)(struct file *file))
 			p--;
 		}
 	}
+	{
+		aufs_bindex_t s = finfo->fi_bstart, e = finfo->fi_bend;
+		finfo->fi_bstart = 0;
+		finfo->fi_bend = sbend(sb);
+		au_debug_on();
+		//DbgFile(file);
+		au_debug_off();
+		finfo->fi_bstart = s;
+		finfo->fi_bend = e;
+	}
 
 	p = finfo->fi_hfile;
-	bend = dbend(dentry);
-	for (finfo->fi_bstart = 0; finfo->fi_bstart <= bend;
-	     finfo->fi_bstart++, p++)
-		if (p->hf_file)
-			break;
+	if (!au_is_mmapped(file) && !d_unhashed(dentry)) {
+		bend = dbend(dentry);
+		if (bend < finfo->fi_bend)
+			bend = finfo->fi_bend;
+		//Dbg("%d\n", bend);
+		for (finfo->fi_bstart = 0; finfo->fi_bstart <= bend;
+		     finfo->fi_bstart++, p++)
+			if (p->hf_file)
+				break;
+	} else {
+		bend = find_brindex(sb, brid);
+		//Dbg("%d\n", bend);
+		for (finfo->fi_bstart = 0; finfo->fi_bstart < bend;
+		     finfo->fi_bstart++, p++)
+			if (p->hf_file) {
+				fput(p->hf_file);
+				p->hf_file = NULL;
+				DEBUG_ON(!p->hf_br);
+				br_put(p->hf_br);
+				p->hf_br = NULL;
+			}
+		bend = dbend(dentry);
+		if (bend < finfo->fi_bend)
+			bend = finfo->fi_bend;
+		//Dbg("%d\n", bend);
+	}
+
 	p = finfo->fi_hfile + bend;
-	for (finfo->fi_bend = bend; finfo->fi_bend >= 0; finfo->fi_bend--, p--)
+	for (finfo->fi_bend = bend; finfo->fi_bend >= finfo->fi_bstart;
+	     finfo->fi_bend--, p--)
 		if (p->hf_file)
 			break;
+	//Dbg("%d, %d\n", finfo->fi_bstart, finfo->fi_bend);
 	DEBUG_ON(finfo->fi_bend < finfo->fi_bstart);
+	//DbgFile(file);
 
 	err = 0;
 #if 0 // todo:
@@ -525,6 +560,9 @@ static int refresh_file(struct file *file, int (*reopen)(struct file *file))
 		goto out; /* success */
 	}
 #endif
+
+	if (unlikely(au_is_mmapped(file) || d_unhashed(dentry)))
+		goto out_update; /* success */
 
  again:
 	bstart = ibstart(inode);
@@ -563,14 +601,14 @@ static int refresh_file(struct file *file, int (*reopen)(struct file *file))
 		hdir_unlock(h_dir, dir, bstart);
 		di_read_unlock(parent, AUFS_I_RLOCK);
 #else
-		if (!au_is_kthread(current)) {
+		if (!is_aufsd(current)) {
 			struct cpup_pseudo_link_args args = {
 				.errp		= &err,
 				.dentry		= dentry,
 				.bdst		= bstart,
 				.do_lock	= 1
 			};
-			wkq_wait(call_cpup_pseudo_link, &args);
+			au_wkq_wait(call_cpup_pseudo_link, &args);
 		} else
 			err = cpup_pseudo_link(dentry, bstart, /*do_lock*/1);
 #endif
@@ -581,8 +619,10 @@ static int refresh_file(struct file *file, int (*reopen)(struct file *file))
 
 	err = reopen(file);
 	//err = -1;
+ out_update:
 	if (!err) {
 		au_update_figen(file);
+		//DbgFile(file);
 		return 0; /* success */
 	}
 
@@ -603,6 +643,7 @@ int au_reval_and_lock_finfo(struct file *file, int (*reopen)(struct file *file),
 	int err, sgen, fgen, pseudo_link;
 	struct dentry *dentry;
 	struct super_block *sb;
+	aufs_bindex_t bstart;
 
 	dentry = file->f_dentry;
 	LKTRTrace("%.*s, w %d, l %d\n", DLNPair(dentry), wlock, locked);
@@ -610,16 +651,18 @@ int au_reval_and_lock_finfo(struct file *file, int (*reopen)(struct file *file),
 	SiMustAnyLock(sb);
 
 	err = 0;
-	if (IS_ROOT(dentry) || au_is_mmapped(file))
-		goto out_lock;
-
 	sgen = au_sigen(sb);
-	di_read_lock_child(dentry, AUFS_I_RLOCK);
+	fi_write_lock(file);
 	fgen = au_figen(file);
-	pseudo_link = (dbstart(dentry) != ibstart(dentry->d_inode));
+	di_read_lock_child(dentry, AUFS_I_RLOCK);
+	bstart = dbstart(dentry);
+	pseudo_link = (bstart != ibstart(dentry->d_inode));
 	di_read_unlock(dentry, AUFS_I_RLOCK);
-	if (sgen == fgen && !pseudo_link)
-		goto out_lock;
+	if (sgen == fgen && !pseudo_link && fbstart(file) == bstart) {
+		if (!wlock)
+			fi_downgrade_lock(file);
+		return 0; /* success */
+	}
 
 	LKTRTrace("sgen %d, fgen %d\n", sgen, fgen);
 	if (sgen != au_digen(dentry)) {
@@ -637,7 +680,6 @@ int au_reval_and_lock_finfo(struct file *file, int (*reopen)(struct file *file),
 		DEBUG_ON(au_digen(dentry) != sgen);
 	}
 
-	fi_write_lock(file);
 	di_read_lock_child(dentry, AUFS_I_RLOCK);
 	err = refresh_file(file, reopen);
 	//if (LktrCond) err = -1;
@@ -647,13 +689,7 @@ int au_reval_and_lock_finfo(struct file *file, int (*reopen)(struct file *file),
 			fi_downgrade_lock(file);
 	} else
 		fi_write_unlock(file);
-	goto out;
 
- out_lock:
-	if (!wlock)
-		fi_read_lock(file);
-	else
-		fi_write_lock(file);
  out:
 	TraceErr(err);
 	return err;

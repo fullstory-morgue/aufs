@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: misc.c,v 1.28 2007/03/27 12:49:40 sfjro Exp $ */
+/* $Id: misc.c,v 1.30 2007/04/23 00:56:45 sfjro Exp $ */
 
 //#include <linux/fs.h>
 //#include <linux/namei.h>
@@ -24,7 +24,7 @@
 //#include <asm/uaccess.h>
 #include "aufs.h"
 
-void *au_kzrealloc(void *p, int nused, int new_sz)
+void *au_kzrealloc(void *p, int nused, int new_sz, gfp_t gfp)
 {
 	void *q;
 
@@ -38,7 +38,7 @@ void *au_kzrealloc(void *p, int nused, int new_sz)
 		return p;
 	}
 
-	q = kmalloc(new_sz, GFP_KERNEL);
+	q = kmalloc(new_sz, gfp);
 	//q = NULL;
 	if (unlikely(!q))
 		return NULL;
@@ -99,6 +99,8 @@ int au_copy_file(struct file *dst, struct file *src, loff_t len,
 	int err, all_zero, dlgt;
 	unsigned long blksize;
 	char *buf;
+	/* reduce stack space */
+	struct iattr *ia;
 
 	LKTRTrace("%.*s, %.*s\n",
 		  DLNPair(dst->f_dentry), DLNPair(src->f_dentry));
@@ -114,6 +116,9 @@ int au_copy_file(struct file *dst, struct file *src, loff_t len,
 	//buf = NULL;
 	if (unlikely(!buf))
 		goto out;
+	ia = kmalloc(sizeof(*ia), GFP_KERNEL);
+	if (unlikely(!ia))
+		goto out_buf;
 
 	dlgt = need_dlgt(sb);
 	err = all_zero = 0;
@@ -172,11 +177,6 @@ int au_copy_file(struct file *dst, struct file *src, loff_t len,
 
 	/* the last block may be a hole */
 	if (unlikely(!err && all_zero)) {
-		struct iattr ia = {
-			.ia_size	= dst->f_pos,
-			.ia_valid	= ATTR_SIZE | ATTR_FILE,
-			.ia_file	= dst
-		};
 		struct dentry *h_d = dst->f_dentry;
 		struct inode *h_i = h_d->d_inode;
 
@@ -185,12 +185,17 @@ int au_copy_file(struct file *dst, struct file *src, loff_t len,
 			err = vfsub_write_k(dst, "\0", 1, &dst->f_pos, dlgt);
 		} while (err == -EAGAIN || err == -EINTR);
 		if (err == 1) {
+			ia->ia_size = dst->f_pos;
+			ia->ia_valid = ATTR_SIZE | ATTR_FILE;
+			ia->ia_file = dst;
 			hi_lock_child2(h_i);
-			err = vfsub_notify_change(h_d, &ia, dlgt);
+			err = vfsub_notify_change(h_d, ia, dlgt);
 			i_unlock(h_i);
 		}
 	}
 
+	kfree(ia);
+ out_buf:
 	kfree(buf);
  out:
 	TraceErr(err);

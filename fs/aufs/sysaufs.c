@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: sysaufs.c,v 1.2 2007/04/09 02:44:47 sfjro Exp $ */
+/* $Id: sysaufs.c,v 1.4 2007/04/23 00:58:15 sfjro Exp $ */
 
 #include <linux/module.h>
 #include <linux/seq_file.h>
@@ -291,7 +291,8 @@ static int make_stat(struct seq_file *seq)
 	for (i = 0; !err && i < aufs_nwkq; i++)
 		err = seq_printf(seq, " %u", au_wkq[i].max_busy);
 	if (!err)
-		err = seq_putc(seq, '\n');
+		err = seq_printf(seq, ", %u(generic)\n",
+				 au_wkq[aufs_nwkq].max_busy);
 	TraceErr(err);
 	return err;
 }
@@ -301,7 +302,7 @@ static int make_stat(struct seq_file *seq)
 static int make(int index, int (*make_index)(struct seq_file *seq))
 {
 	int err;
-	struct seq_file *seq; // dirty
+	struct seq_file *seq;
 
 	TraceEnter();
 	DEBUG_ON(Priv(index));
@@ -355,14 +356,17 @@ static struct dentry *find_me(struct dentry *parent, int index)
 	const char *name = Name(index);
 	const int len = strlen(name);
 
-	// no lock
 	//Dbg("%.*s\n", DLNPair(parent));
+	spin_lock(&dcache_lock);
 	list_for_each_entry(dentry, &parent->d_subdirs, D_CHILD) {
 		//Dbg("%.*s\n", DLNPair(dentry));
 		if (len == dentry->d_name.len
-		    && !strcmp(dentry->d_name.name, name))
+		    && !strcmp(dentry->d_name.name, name)) {
+			spin_unlock(&dcache_lock);
 			return dentry;
+		}
 	}
+	spin_unlock(&dcache_lock);
 #endif
 	return NULL;
 }

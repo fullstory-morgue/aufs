@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: finfo.c,v 1.21 2007/03/27 12:49:17 sfjro Exp $ */
+/* $Id: finfo.c,v 1.22 2007/04/23 00:56:15 sfjro Exp $ */
 
 #include "aufs.h"
 
@@ -150,8 +150,8 @@ void au_fin_finfo(struct file *file)
 
 	dentry = file->f_dentry;
 	LKTRTrace("%.*s\n", DLNPair(dentry));
+	SiMustAnyLock(dentry->d_sb);
 
-	si_read_lock(dentry->d_sb); // unnecessary
 	fi_write_lock(file);
 	bend = fbend(file);
 	bindex = fbstart(file);
@@ -175,7 +175,6 @@ void au_fin_finfo(struct file *file)
 	fi_write_unlock(file);
 	cache_free_finfo(finfo);
 	//file->private_data = NULL;
-	si_read_unlock(dentry->d_sb);
 }
 
 int au_init_finfo(struct file *file)

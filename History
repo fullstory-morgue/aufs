@@ -2,7 +2,7 @@
 History of aufs
 Junjiro Okajima
 
-# $Id: History,v 1.15 2007/04/09 02:49:43 sfjro Exp $
+# $Id: History,v 1.16 2007/04/23 01:00:29 sfjro Exp $
 
 Note:
 - the described date are all in JST.
@@ -12,6 +12,43 @@ Note:
   failed. this is the main reason to begin writing this file.
 
 ----------------------------------------------------------------------
+
+20070423
+- bugfix: file revalidation after rename(tgt).
+- strict inode lock in fsync() before 2.6.17.
+- restore rdacahe option, which was dropped by mistake.
+- print the depth of generic workqueue in sysfs/aufs/stat.
+- testing initramfs.
+- still testing udba=inotify.
+- simplified "uid/gid/perm" message.
+- reduce stack space.
+- make aufs_cond available even if CONFIG_LKTR is disabled.
+- revise au_fin_finfo() and si lock.
+- simplified cache function definitions.
+- merge both of wait/nowait works into a single enqueue function.
+- rename wkq_wait() to au_wkq_wait().
+- rename some name hash functions, and two new functions nash_new()
+  and nhash_del().
+	+ init_nhash()	--> nhash_init()
+	+ move_nhash()	--> nhash_move()
+	+ free_nhash()	--> nhash_fin()
+- move au_is_kthread() to wkq.h, and rename to is_aufsd().
+- rename au_init_wkq() to au_wkq_init().
+- rename au_fin_wkq() to au_wkq_fin().
+- rename au_inotify_exit() to au_inotify_fin().
+- rename dbg_dlgt_exit() to dbg_dlgt_fin().
+
+20070416
+- bugfix: introduce dcsub.[ch] to handle dentry cache.
+- bugfix: use readlink(1) to get cwd, in auplink, mount.aufs and
+  unionctl, reported by Torsten Luettgert. Actually, to use readlink
+  was suggested by Tomas M last year.
+- support initramfs.
+- verbose warning message for 'different uid/gid/perm.'
+- still testing udba=inotify.
+- support GFP flags in au_kzrealloc().
+- simplified lock/unlock functions definition by a new macro
+  SimpleRWSem...
 
 20070409
 - introduce new branch attribute "nolwh."

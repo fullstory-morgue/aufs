@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: inode.c,v 1.18 2007/04/02 01:13:12 sfjro Exp $ */
+/* $Id: inode.c,v 1.20 2007/04/23 00:59:51 sfjro Exp $ */
 
 #include "aufs.h"
 
@@ -40,7 +40,7 @@ int au_refresh_hinode(struct dentry *dentry)
 	new_sz = sizeof(*iinfo->ii_hinode) * (sbend(sb) + 1);
 	iinfo = itoii(inode);
 	p = au_kzrealloc(iinfo->ii_hinode, sizeof(*p) * (iinfo->ii_bend + 1),
-			 new_sz);
+			 new_sz, GFP_KERNEL);
 	//p = NULL;
 	if (unlikely(!p))
 		goto out;
@@ -116,6 +116,7 @@ int au_refresh_hinode(struct dentry *dentry)
 			break;
 		}
 	p = iinfo->ii_hinode + bend;
+	//for (bindex = bend; bindex > iinfo->ii_bstart; bindex--, p--)
 	for (bindex = bend; bindex >= 0; bindex--, p--)
 		if (p->hi_inode) {
 			iinfo->ii_bend = bindex;
@@ -225,6 +226,7 @@ struct inode *au_new_inode(struct dentry *dentry)
 	if (unlikely(err))
 		goto out;
 
+	LKTRTrace("i%lu\n", ino);
 	err = -ENOMEM;
 	//inode = iget(sb, ino);
 	inode = iget_locked(sb, ino);
@@ -236,6 +238,7 @@ struct inode *au_new_inode(struct dentry *dentry)
 	err = -ENOMEM;
 	if (unlikely(is_bad_inode(inode)))
 		goto out_iput;
+	LKTRTrace("%lx, new %d\n", inode->i_state, !!(inode->i_state & I_NEW));
 	if (inode->i_state & I_NEW)
 		sb->s_op->read_inode(inode);
 
@@ -251,20 +254,24 @@ struct inode *au_new_inode(struct dentry *dentry)
 			    /* && au_flag_test(sb, AuFlag_UDBA_INOTIFY) */)) {
 		int found = 0;
 		aufs_bindex_t bend = ibend(inode);
+
 		for (; !found && bindex <= bend; bindex++)
 			found = (hidden_inode == au_h_iptr_i(inode, bindex));
 
 		if (unlikely(!found)) {
 			ii_write_unlock(inode);
+			//todo: bug?
 			iput(inode);
 			err = xino_write(sb, bstart, hidden_ino, /*ino*/0);
 			if (unlikely(err))
 				goto out_iput;
+			//iput(inode);
 			goto new_ino;
 		}
 
 		if (S_ISDIR(inode->i_mode)) {
 			unsigned int flags = au_hi_flags(inode, /*isdir*/1);
+
 			bindex = dbstart(dentry);
 			bend = dbend(dentry);
 			for (; bindex <= bend; bindex++) {

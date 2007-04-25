@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: dentry.c,v 1.36 2007/04/02 01:13:12 sfjro Exp $ */
+/* $Id: dentry.c,v 1.38 2007/04/23 00:55:05 sfjro Exp $ */
 
 //#include <linux/fs.h>
 //#include <linux/namei.h>
@@ -80,7 +80,7 @@ static struct dentry *lkup_hash(const char *name, struct dentry *parent,
 			.base	= parent,
 			.nd	= &tmp_nd
 		};
-		wkq_wait(call_lookup_hash, &args, /*dlgt*/1);
+		au_wkq_wait(call_lookup_hash, &args, /*dlgt*/1);
 	}
 #endif
 	path_release(&tmp_nd);
@@ -135,7 +135,7 @@ struct dentry *lkup_one(const char *name, struct dentry *parent, int len,
 				.parent	= parent,
 				.len	= len
 			};
-			wkq_wait(call_lookup_one_len, &args, /*dlgt*/1);
+			au_wkq_wait(call_lookup_one_len, &args, /*dlgt*/1);
 		}
 #endif
 	} else
@@ -371,7 +371,7 @@ struct dentry *sio_lkup_one(const char *name, struct dentry *parent, int len,
 		};
 
 		lkup->dlgt = 0;
-		wkq_wait(call_lkup_one, &args, /*dlgt*/0);
+		au_wkq_wait(call_lkup_one, &args, /*dlgt*/0);
 		lkup->dlgt = dlgt;
 	}
 
@@ -457,7 +457,7 @@ int au_refresh_hdentry(struct dentry *dentry, mode_t type)
 	new_sz = sizeof(*dinfo->di_hdentry) * (sbend(sb) + 1);
 	dinfo = dtodi(dentry);
 	p = au_kzrealloc(dinfo->di_hdentry, sizeof(*p) * (dinfo->di_bend + 1),
-			 new_sz);
+			 new_sz, GFP_KERNEL);
 	//p = NULL;
 	if (unlikely(!p))
 		goto out;
@@ -517,6 +517,7 @@ int au_refresh_hdentry(struct dentry *dentry, mode_t type)
 			break;
 		}
 	p = dinfo->di_hdentry + parent_bend;
+	//for (bindex = parent_bend; bindex > dinfo->di_bstart; bindex--, p--)
 	for (bindex = parent_bend; bindex >= 0; bindex--, p--)
 		if (p->hd_dentry) {
 			dinfo->di_bend = bindex;
@@ -708,8 +709,10 @@ int au_reval_dpath(struct dentry *dentry, int sgen)
 			d = parent;
 		}
 
-		if (d != dentry)
+		if (d != dentry) {
+			//i_lock(d->d_inode);
 			di_write_lock_child(d);
+		}
 
 		/* someone might update our dentry while we were sleeping */
 		if (AufsGenOlder(au_digen(d), sgen)) {
@@ -724,8 +727,10 @@ int au_reval_dpath(struct dentry *dentry, int sgen)
 			di_read_unlock(parent, AUFS_I_RLOCK);
 		}
 
-		if (d != dentry)
+		if (d != dentry) {
 			di_write_unlock(d);
+			//i_unlock(d->d_inode);
+		}
 		if (unlikely(err))
 			break;
 	}
@@ -750,6 +755,16 @@ static int aufs_d_revalidate(struct dentry *dentry, struct nameidata *nd)
 	//remove failure case: DEBUG_ON(!IS_ROOT(dentry) && d_unhashed(dentry));
 	DEBUG_ON(!dentry->d_fsdata);
 
+#if 0
+	if (IS_ROOT(dentry)) {
+		//au_debug_on();
+		lktr_set_pid(current->pid);
+		DbgDentry(dentry);
+		lktr_clear_pid(current->pid);
+		//au_debug_off();
+	}
+#endif
+
 	err = -EINVAL;
 	DEBUG_ON(au_direval_test(dentry) < 0);
 	if (unlikely(au_direval_test(dentry))) {
@@ -758,6 +773,7 @@ static int aufs_d_revalidate(struct dentry *dentry, struct nameidata *nd)
 #endif
 		/* root directory was handled in aufs_inotify() */
 		if (unlikely(IS_ROOT(dentry))) {
+			//todo: bug
 			static DECLARE_WAIT_QUEUE_HEAD(wq);
 			wait_event(wq, !au_direval_test(dentry));
 		} else
@@ -770,11 +786,15 @@ static int aufs_d_revalidate(struct dentry *dentry, struct nameidata *nd)
 	if (au_digen(dentry) == sgen)
 		di_read_lock_child(dentry, AUFS_I_RLOCK);
 	else {
-		DEBUG_ON(!dentry->d_inode);
+		struct inode *inode;
+		inode = dentry->d_inode;
+		DEBUG_ON(!inode);
+		//i_lock(inode);
 		di_write_lock_child(dentry);
 		err = au_reval_dpath(dentry, sgen);
 		//err = -1;
 		di_downgrade_lock(dentry, AUFS_I_RLOCK);
+		//i_unlock(inode);
 		if (unlikely(err))
 			goto out_unlock;
 	}
@@ -809,6 +829,10 @@ static void aufs_d_release(struct dentry *dentry)
 
 	LKTRTrace("%.*s\n", DLNPair(dentry));
 	DEBUG_ON(!d_unhashed(dentry));
+#if 0
+	if (IS_ROOT(dentry))
+		Dbg("why root?\n");
+#endif
 
 	dinfo = dentry->d_fsdata;
 	if (unlikely(!dinfo))

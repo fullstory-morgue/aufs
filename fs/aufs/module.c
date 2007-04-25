@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: module.c,v 1.7 2007/04/09 02:47:10 sfjro Exp $ */
+/* $Id: module.c,v 1.8 2007/04/23 00:57:20 sfjro Exp $ */
 
 //#include <linux/init.h>
 //#include <linux/kobject.h>
@@ -68,7 +68,7 @@ extern struct file_system_type aufs_fs_type;
 #include "dbg_dlgt.c"
 #else
 #define dbg_dlgt_init()	0
-#define dbg_dlgt_exit()	/* */
+#define dbg_dlgt_fin()	/* */
 #endif
 
 /*
@@ -231,7 +231,7 @@ static int __init aufs_init(void)
 #endif
 
 	err = -EINVAL;
-	if (aufs_nwkq <= 0)
+	if (unlikely(aufs_nwkq <= 0))
 		goto out;
 	err = create_cache();
 	if (unlikely(err))
@@ -239,7 +239,7 @@ static int __init aufs_init(void)
 	err = sysaufs_init();
 	if (unlikely(err))
 		goto out_cache;
-	err = au_init_wkq();
+	err = au_wkq_init();
 	if (unlikely(err))
 		goto out_kobj;
 	err = au_inotify_init();
@@ -255,11 +255,11 @@ static int __init aufs_init(void)
 	return 0; /* success */
 
  out_dlgt:
-	dbg_dlgt_exit();
+	dbg_dlgt_fin();
  out_inotify:
-	au_inotify_exit();
+	au_inotify_fin();
  out_wkq:
-	au_fin_wkq();
+	au_wkq_fin();
  out_kobj:
 	sysaufs_fin();
  out_cache:
@@ -272,9 +272,9 @@ static int __init aufs_init(void)
 static void __exit aufs_exit(void)
 {
 	unregister_filesystem(&aufs_fs_type);
-	dbg_dlgt_exit();
-	au_inotify_exit();
-	au_fin_wkq();
+	dbg_dlgt_fin();
+	au_inotify_fin();
+	au_wkq_fin();
 	sysaufs_fin();
 	destroy_cache();
 }

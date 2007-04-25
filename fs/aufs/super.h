@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: super.h,v 1.40 2007/04/09 02:45:00 sfjro Exp $ */
+/* $Id: super.h,v 1.41 2007/04/16 01:14:58 sfjro Exp $ */
 
 #ifndef __AUFS_SUPER_H__
 #define __AUFS_SUPER_H__
@@ -78,12 +78,18 @@ struct aufs_sbinfo {
 	/* sysfs */
 	struct kobject		si_kobj;
 
+	/* hinotify */
+	atomic_t		si_reval_root;
+	wait_queue_t		si_reval_root_wq;
+
 #if 0 //def CONFIG_AUFS_AS_BRANCH
 	/* locked vma list for mmap() */ // very dirty
 	spinlock_t		si_lvma_lock;
 	struct list_head	si_lvma;
 #endif
 };
+
+/* ---------------------------------------------------------------------- */
 
 /* Mount flags */
 #define AuFlag_XINO		1
@@ -262,25 +268,7 @@ static inline unsigned int au_flag_test_coo(struct super_block *sb)
 /* ---------------------------------------------------------------------- */
 
 /* lock superblock. mainly for entry point functions */
-static inline void si_read_lock(struct super_block *sb)
-{
-	rw_read_lock(&stosi(sb)->si_rwsem);
-}
-
-static inline void si_read_unlock(struct super_block *sb)
-{
-	rw_read_unlock(&stosi(sb)->si_rwsem);
-}
-
-static inline void si_write_lock(struct super_block *sb)
-{
-	rw_write_lock(&stosi(sb)->si_rwsem);
-}
-
-static inline void si_write_unlock(struct super_block *sb)
-{
-	rw_write_unlock(&stosi(sb)->si_rwsem);
-}
+SimpleRwsemFuncs(si, struct super_block *sb, stosi(sb)->si_rwsem);
 
 static inline void SiMustReadLock(struct super_block *sb)
 {

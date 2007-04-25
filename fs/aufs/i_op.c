@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: i_op.c,v 1.29 2007/04/09 02:45:23 sfjro Exp $ */
+/* $Id: i_op.c,v 1.30 2007/04/23 00:55:05 sfjro Exp $ */
 
 //#include <linux/fs.h>
 //#include <linux/namei.h>
@@ -82,8 +82,8 @@ static int hidden_permission(struct inode *hidden_inode, int mask,
 				.mask		= mask,
 				.fake_nd	= fake_nd
 			};
-			wkq_wait(call_security_inode_permission, &args,
-				 /*dlgt*/1);
+			au_wkq_wait(call_security_inode_permission, &args,
+				    /*dlgt*/1);
 		}
 #endif
 	}

@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: debug.h,v 1.26 2007/04/09 02:44:47 sfjro Exp $ */
+/* $Id: debug.h,v 1.28 2007/04/23 00:55:15 sfjro Exp $ */
 
 #ifndef __AUFS_DEBUG_H__
 #define __AUFS_DEBUG_H__
@@ -27,8 +27,15 @@
 
 #ifdef CONFIG_AUFS_DEBUG
 #define DEBUG_ON(a)	BUG_ON(a)
+extern atomic_t aufs_cond;
+#define au_debug_on()	atomic_inc(&aufs_cond)
+#define au_debug_off()	atomic_dec(&aufs_cond)
+#define au_is_debug()	atomic_read(&aufs_cond)
 #else
 #define DEBUG_ON(a)	/* */
+#define au_debug_on()	/* */
+#define au_debug_off()	/* */
+#define au_is_debug()	0
 #endif
 
 static inline void MtxMustLock(struct mutex *mtx)
@@ -43,19 +50,21 @@ static inline void MtxMustLock(struct mutex *mtx)
 #include <linux/lktr.h>
 #ifdef CONFIG_AUFS_DEBUG
 #undef LktrCond
-extern atomic_t aufs_cond;
-#define LktrCond	((lktr_cond && lktr_cond()) || atomic_read(&aufs_cond))
+#define LktrCond	((lktr_cond && lktr_cond()) || au_is_debug())
 #endif
 #else
-#define LktrCond			0
+#define LktrCond			au_is_debug()
 #define LKTRDumpVma(pre, vma, suf)	/* */
 #define LKTRDumpStack()			/* */
-#define LKTRTrace(format, args...)	/* */
-#define LKTRLabel(label)		/* */
+#define LKTRTrace(fmt, args...) \
+	do {if (LktrCond) Dbg(fmt, ##args);} while (0)
+#define LKTRLabel(label)		LKTRTrace("%s\n", #label)
 #endif /* CONFIG_LKTR */
 
-#define TraceErr(e)	if (unlikely((e) < 0)) LKTRTrace("err %d\n", (int)(e))
-#define TraceErrPtr(p)	if (IS_ERR(p)) LKTRTrace("err %ld\n", PTR_ERR(p))
+#define TraceErr(e) \
+	do {if (unlikely((e) < 0)) LKTRTrace("err %d\n", (int)(e));} while (0)
+#define TraceErrPtr(p) \
+	do {if (IS_ERR(p)) LKTRTrace("err %ld\n", PTR_ERR(p));} while (0)
 #define TraceEnter()	LKTRLabel(enter)
 
 /* dirty macros for debug print, use with "%.*s" and caution */
@@ -110,6 +119,8 @@ void au_dpri_sb(struct super_block *sb);
 #define DbgFile(f)		/* */
 #define DbgSb(sb)		/* */
 #endif
+
+void DbgSleep(int nsec);
 
 #endif /* __KERNEL__ */
 #endif /* __AUFS_DEBUG_H__ */

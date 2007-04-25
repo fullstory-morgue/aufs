@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: vfsub.c,v 1.4 2007/04/09 02:47:22 sfjro Exp $ */
+/* $Id: vfsub.c,v 1.5 2007/04/23 00:55:06 sfjro Exp $ */
 // I'm going to slightly mad
 
 #include "aufs.h"
@@ -50,7 +50,7 @@ int vfsub_permission(struct inode *inode, int mask, struct nameidata *nd,
 			.mask	= mask,
 			.nd	= nd
 		};
-		wkq_wait(call_permission, &args, /*dlgt*/1);
+		au_wkq_wait(call_permission, &args, /*dlgt*/1);
 		return err;
 	}
 }
@@ -85,7 +85,7 @@ int vfsub_create(struct inode *dir, struct dentry *dentry, int mode,
 			.mode	= mode,
 			.nd	= nd
 		};
-		wkq_wait(call_create, &args, /*dlgt*/1);
+		au_wkq_wait(call_create, &args, /*dlgt*/1);
 		return err;
 	}
 }
@@ -118,7 +118,7 @@ int vfsub_symlink(struct inode *dir, struct dentry *dentry, const char *symname,
 			.symname	= symname,
 			.mode		= mode
 		};
-		wkq_wait(call_symlink, &args, /*dlgt*/1);
+		au_wkq_wait(call_symlink, &args, /*dlgt*/1);
 		return err;
 	}
 }
@@ -151,7 +151,7 @@ int vfsub_mknod(struct inode *dir, struct dentry *dentry, int mode, dev_t dev,
 			.mode	= mode,
 			.dev	= dev
 		};
-		wkq_wait(call_mknod, &args, /*dlgt*/1);
+		au_wkq_wait(call_mknod, &args, /*dlgt*/1);
 		return err;
 	}
 }
@@ -181,7 +181,7 @@ int vfsub_mkdir(struct inode *dir, struct dentry *dentry, int mode, int dlgt)
 			.dentry	= dentry,
 			.mode	= mode
 		};
-		wkq_wait(call_mkdir, &args, /*dlgt*/1);
+		au_wkq_wait(call_mkdir, &args, /*dlgt*/1);
 		return err;
 	}
 }
@@ -213,7 +213,7 @@ int vfsub_link(struct dentry *src_dentry, struct inode *dir,
 			.dir		= dir,
 			.dentry		= dentry
 		};
-		wkq_wait(call_link, &args, /*dlgt*/1);
+		au_wkq_wait(call_link, &args, /*dlgt*/1);
 		return err;
 	}
 }
@@ -245,7 +245,7 @@ int vfsub_rename(struct inode *src_dir, struct dentry *src_dentry,
 			.dir		= dir,
 			.dentry		= dentry
 		};
-		wkq_wait(call_rename, &args, /*dlgt*/1);
+		au_wkq_wait(call_rename, &args, /*dlgt*/1);
 		return err;
 	}
 }
@@ -273,7 +273,7 @@ int vfsub_rmdir(struct inode *dir, struct dentry *dentry, int dlgt)
 			.dir	= dir,
 			.dentry	= dentry
 		};
-		wkq_wait(call_rmdir, &args, /*dlgt*/1);
+		au_wkq_wait(call_rmdir, &args, /*dlgt*/1);
 		return err;
 	}
 }
@@ -332,7 +332,7 @@ ssize_t vfsub_read_u(struct file *file, char __user *ubuf, size_t count,
 
 		read = 0;
 		do {
-			wkq_wait(call_read_k, &args, /*dlgt*/1);
+			au_wkq_wait(call_read_k, &args, /*dlgt*/1);
 			if (unlikely(err > 0
 				     && copy_to_user(ubuf, args.kbuf, err))) {
 				err = -EFAULT;
@@ -372,7 +372,7 @@ ssize_t vfsub_read_k(struct file *file, void *kbuf, size_t count, loff_t *ppos,
 			.ppos	= ppos
 		};
 		args.kbuf = kbuf;
-		wkq_wait(call_read_k, &args, /*dlgt*/1);
+		au_wkq_wait(call_read_k, &args, /*dlgt*/1);
 		return err;
 	}
 }
@@ -435,7 +435,7 @@ ssize_t vfsub_write_u(struct file *file, const char __user *ubuf, size_t count,
 				goto out_free;
 			}
 
-			wkq_wait(call_write_k, &args, /*dlgt*/1);
+			au_wkq_wait(call_write_k, &args, /*dlgt*/1);
 			if (err > 0) {
 				count -= err;
 				if (count < args.count)
@@ -470,7 +470,7 @@ ssize_t vfsub_write_k(struct file *file, void *kbuf, size_t count, loff_t *ppos,
 			.ppos	= ppos
 		};
 		args.kbuf = kbuf;
-		wkq_wait(call_write_k, &args, /*dlgt*/1);
+		au_wkq_wait(call_write_k, &args, /*dlgt*/1);
 		return err;
 	}
 }
@@ -500,7 +500,7 @@ int vfsub_readdir(struct file *file, filldir_t filldir, void *arg, int dlgt)
 			.filldir	= filldir,
 			.arg		= arg
 		};
-		wkq_wait(call_readdir, &args, /*dlgt*/1);
+		au_wkq_wait(call_readdir, &args, /*dlgt*/1);
 		return err;
 	}
 }
@@ -548,7 +548,7 @@ int vfsub_notify_change(struct dentry *dentry, struct iattr *ia, int dlgt)
 	if (!dlgt)
 		call_notify_change(&args);
 	else
-		wkq_wait(call_notify_change, &args, /*dlgt*/1);
+		au_wkq_wait(call_notify_change, &args, /*dlgt*/1);
 #endif
 
 	TraceErr(err);
@@ -570,7 +570,9 @@ static void call_unlink(void *args)
 	const int stop_sillyrename = (au_is_nfs(a->dentry->d_sb)
 				      && atomic_read(&a->dentry->d_count) == 1);
 
-	LKTRTrace("%.*s\n", DLNPair(a->dentry));
+	LKTRTrace("%.*s, stop_silly %d, cnt %d\n",
+		  DLNPair(a->dentry), stop_sillyrename,
+		  atomic_read(&a->dentry->d_count));
 	IMustLock(a->dir);
 
 	if (!stop_sillyrename)
@@ -623,7 +625,7 @@ int vfsub_unlink(struct inode *dir, struct dentry *dentry, int dlgt)
 	if (!dlgt)
 		call_unlink(&args);
 	else
-		wkq_wait(call_unlink, &args, /*dlgt*/1);
+		au_wkq_wait(call_unlink, &args, /*dlgt*/1);
 #endif
 	return err;
 }
@@ -657,7 +659,7 @@ int vfsub_statfs(void *arg, struct kstatfs *buf, int dlgt)
 	if (!dlgt)
 		call_statfs(&args);
 	else
-		wkq_wait(call_statfs, &args, /*dlgt*/1);
+		au_wkq_wait(call_statfs, &args, /*dlgt*/1);
 #endif
 	return err;
 }

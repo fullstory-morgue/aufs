@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: dir.h,v 1.16 2007/03/27 12:46:23 sfjro Exp $ */
+/* $Id: dir.h,v 1.17 2007/04/23 00:55:40 sfjro Exp $ */
 
 #ifndef __AUFS_DIR_H__
 #define __AUFS_DIR_H__
@@ -91,9 +91,11 @@ void au_add_nlink(struct inode *dir, struct inode *h_dir);
 void au_sub_nlink(struct inode *dir, struct inode *h_dir);
 
 //vdir.c
-void init_nhash(struct aufs_nhash *nhash);
-void move_nhash(struct aufs_nhash *dst, struct aufs_nhash *src);
-void free_nhash(struct aufs_nhash *whlist);
+struct aufs_nhash *nhash_new(gfp_t gfp);
+void nhash_del(struct aufs_nhash *nhash);
+void nhash_init(struct aufs_nhash *nhash);
+void nhash_move(struct aufs_nhash *dst, struct aufs_nhash *src);
+void nhash_fin(struct aufs_nhash *nhash);
 int is_longer_wh(struct aufs_nhash *whlist, aufs_bindex_t btgt, int limit);
 int test_known_wh(struct aufs_nhash *whlist, char *name, int namelen);
 int append_wh(struct aufs_nhash *whlist, char *name, int namelen,

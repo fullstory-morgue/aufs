@@ -17,7 +17,7 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
-# $Id: initrd.mk,v 1.2 2007/03/12 01:54:56 sfjro Exp $
+# $Id: initrd.mk,v 1.4 2007/04/23 00:59:51 sfjro Exp $
 
 all:
 	false
@@ -41,6 +41,9 @@ initrd.dir: busybox
 	do sudo mknod $@/dev/loop$$i b 7 $$i; mkdir $@/branch/loop/$$i; done
 	sudo mknod $@/dev/cloop0 b 240 0
 	sudo mknod $@/dev/lktr c 10 63
+	for i in lktr lktr_exec; \
+	do test -e $$i && cp -p $$i $@; \
+	done
 	cp -p busybox $@/bin
 	ln $@/bin/busybox $@/bin/sh
 	for i in ${InitrdExtCmd}; \
@@ -54,3 +57,10 @@ initrd: initrd.dir $(addprefix initrd.dir/, linuxrc)
 	sudo chown -R root:root $@.dir/*
 	mkcramfs $@.dir $@
 	sudo chown -R ${USER} $@.dir/*
+initramfs: initrd
+	cd initrd.dir && \
+	find . | \
+	cpio --quiet -o -H newc > ../$@
+#	cpio --quiet -c -o > ../$@
+initramfs.gz: initramfs
+	gzip -9 $<

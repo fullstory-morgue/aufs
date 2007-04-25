@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: hinotify.c,v 1.14 2007/04/09 02:47:10 sfjro Exp $ */
+/* $Id: hinotify.c,v 1.16 2007/04/23 00:56:29 sfjro Exp $ */
 
 #include "aufs.h"
 
@@ -224,12 +224,14 @@ static char *in_name(u32 mask)
 #define in_name(m) "??"
 #endif
 
+#if 0
 static void do_drop(struct dentry *dentry)
 {
 	spin_lock(&dentry->d_lock);
  	__d_drop(dentry);
 	spin_unlock(&dentry->d_lock);
 }
+#endif
 
 static void reval_alias(struct inode *inode)
 {
@@ -237,7 +239,7 @@ static void reval_alias(struct inode *inode)
 
 	list_for_each_entry(alias, &inode->i_dentry, d_alias) {
 		//Dbg("%.*s\n", DLNPair(alias));
-#if 1
+#if 0
 		do_drop(alias);
 #else
 		au_direval_inc(alias);
@@ -262,7 +264,7 @@ static int reval_child(const char *name, struct dentry *parent)
 		    && !memcmp(child_name->name, name, len)) {
 			if (!inode || S_ISDIR(inode->i_mode)) {
 				//Dbg("%.*s\n", LNPair(child_name));
-#if 1
+#if 0
 				do_drop(child);
 #else
 				au_direval_inc(child);
@@ -297,7 +299,7 @@ static void postproc(void *args)
 	ino_t ino, h_ino;
 	int err;
 
-	//atomic_inc(&aufs_cond);
+	//au_debug_on();
 	TraceEnter();
 	DEBUG_ON(!a->dir);
 #ifdef ForceInotify
@@ -319,7 +321,7 @@ static void postproc(void *args)
 	}
 
 	/* make dir entries obsolete */
-	if (!a->self) {
+	if (0 || !a->self) {
 		struct aufs_vdir *vdir;
 		vdir = ivdir(a->dir);
 		if (vdir)
@@ -368,7 +370,8 @@ static void postproc(void *args)
 					break;
 			}
 			DEBUG_ON(!au_h_iptr(a->dir));
-		} else if (bfound == bend) {
+		}
+		if (bfound == bend) {
 			for (bindex = bend - 1; bindex >= bstart; bindex--)
 				if (au_h_iptr_i(a->dir, bindex)) {
 					set_ibend(a->dir, bindex);
@@ -378,7 +381,7 @@ static void postproc(void *args)
 		}
 	}
 
-#if 0
+#if 1
 	if (!a->dentry)
 		goto out;
 	bstart = dbstart(a->dentry);
@@ -391,7 +394,8 @@ static void postproc(void *args)
 				break;
 			}
 		DEBUG_ON(!au_h_dptr(a->dentry));
-	} else if (bfound == bend) {
+	}
+	if (bfound == bend) {
 		for (bindex = bend - 1; bindex >= bstart; bindex--)
 			if (au_h_dptr_i(a->dentry, bindex)) {
 				set_dbend(a->dentry, bindex);
@@ -403,8 +407,10 @@ static void postproc(void *args)
 
  out:
 	if (a->dentry) {
-		if (a->mask & (IN_MOVE_SELF | IN_DELETE_SELF))
+		if (a->mask & (IN_MOVE_SELF | IN_DELETE_SELF)) {
 			d_drop(a->dentry);
+			//au_direval_inc(a->dentry);
+		}
 		aufs_read_unlock(a->dentry, AUFS_D_WLOCK);
 		dput(a->dentry);
 	} else {
@@ -416,7 +422,7 @@ static void postproc(void *args)
 	iput(a->h_dir);
 	iput(a->dir);
 	kfree(a);
-	//atomic_dec(&aufs_cond);
+	//au_debug_off();
 }
 
 static void aufs_inotify(struct inotify_watch *watch, u32 wd, u32 mask,
@@ -489,9 +495,9 @@ static void aufs_inotify(struct inotify_watch *watch, u32 wd, u32 mask,
 		if (name)
 			reval_child(name, parent);
 #if 0
-		atomic_inc(&aufs_cond);
+		au_debug_on();
 		DbgDentry(parent);
-		atomic_dec(&aufs_cond);
+		au_debug_off();
 #endif
 	}
 
@@ -502,7 +508,7 @@ static void aufs_inotify(struct inotify_watch *watch, u32 wd, u32 mask,
 	args->dentry = parent;
 	args->mask = mask;
 	args->self = !!name;
-	wkq_nowait(postproc, args, /*dlgt*/0);
+	au_wkq_nowait(postproc, args, /*dlgt*/0);
 }
 
 static void aufs_inotify_destroy(struct inotify_watch *watch)
@@ -526,7 +532,7 @@ int __init au_inotify_init(void)
 	return PTR_ERR(in_handle);
 }
 
-void au_inotify_exit(void)
+void au_inotify_fin(void)
 {
 	inotify_destroy(in_handle);
 }

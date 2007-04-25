@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: iinfo.c,v 1.27 2007/03/27 12:51:43 sfjro Exp $ */
+/* $Id: iinfo.c,v 1.28 2007/04/23 00:59:51 sfjro Exp $ */
 
 //#include <linux/mm.h>
 #include "aufs.h"
@@ -209,17 +209,20 @@ int au_iinfo_init(struct inode *inode)
 {
 	struct aufs_iinfo *iinfo;
 	struct super_block *sb;
-	int nbr;
+	int nbr, i;
 
 	sb = inode->i_sb;
 	DEBUG_ON(!sb);
 	iinfo = &(container_of(inode, struct aufs_icntnr, vfs_inode)->iinfo);
+	DEBUG_ON(iinfo->ii_hinode);
 	nbr = sbend(sb) + 1;
 	if (unlikely(!nbr))
 		nbr++;
 	iinfo->ii_hinode = kcalloc(nbr, sizeof(*iinfo->ii_hinode), GFP_KERNEL);
 	//iinfo->ii_hinode = NULL;
 	if (iinfo->ii_hinode) {
+		for (i = 0; i < nbr; i++)
+			iinfo->ii_hinode[i].hi_id = -1;
 		rw_init_nolock(&iinfo->ii_rwsem);
 		iinfo->ii_bstart = -1;
 		iinfo->ii_bend = -1;

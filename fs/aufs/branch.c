@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: branch.c,v 1.44 2007/04/09 02:44:16 sfjro Exp $ */
+/* $Id: branch.c,v 1.46 2007/04/23 00:53:40 sfjro Exp $ */
 
 //#include <linux/fs.h>
 //#include <linux/namei.h>
@@ -138,6 +138,7 @@ int find_rw_parent_br(struct dentry *dentry, aufs_bindex_t bend)
 /*
  * test if two hidden_dentries have overlapping branches.
  */
+//todo: try is_subdir()
 static int do_is_overlap(struct super_block *sb, struct dentry *hidden_d1,
 			 struct dentry *hidden_d2)
 {
@@ -253,7 +254,8 @@ static struct aufs_branch *alloc_addbr(struct super_block *sb, int new_nbranch)
 	if (unlikely(!sz))
 		sz = sizeof(*branchp);
 	p = stosi(sb)->si_branch;
-	branchp = au_kzrealloc(p, sz, sizeof(*branchp) * new_nbranch);
+	branchp = au_kzrealloc(p, sz, sizeof(*branchp) * new_nbranch,
+			       GFP_KERNEL);
 	//if (LktrCond) branchp = NULL;
 	if (unlikely(!branchp))
 		goto out;
@@ -263,7 +265,8 @@ static struct aufs_branch *alloc_addbr(struct super_block *sb, int new_nbranch)
 	if (unlikely(!sz))
 		sz = sizeof(*hdentryp);
 	p = dtodi(root)->di_hdentry;
-	hdentryp = au_kzrealloc(p, sz, sizeof(*hdentryp) * new_nbranch);
+	hdentryp = au_kzrealloc(p, sz, sizeof(*hdentryp) * new_nbranch,
+				GFP_KERNEL);
 	//if (LktrCond) hdentryp = NULL;
 	if (unlikely(!hdentryp))
 		goto out;
@@ -273,7 +276,8 @@ static struct aufs_branch *alloc_addbr(struct super_block *sb, int new_nbranch)
 	if (unlikely(!sz))
 		sz = sizeof(*hinodep);
 	p = itoii(inode)->ii_hinode;
-	hinodep = au_kzrealloc(p, sz, sizeof(*hinodep) * new_nbranch);
+	hinodep = au_kzrealloc(p, sz, sizeof(*hinodep) * new_nbranch,
+			       GFP_KERNEL);
 	//if (LktrCond) hinodep = NULL; // unavailable test
 	if (unlikely(!hinodep))
 		goto out;
@@ -329,7 +333,7 @@ static int test_add(struct super_block *sb, struct opt_add *add, int remount)
 		goto out;
 	}
 
-	err = -ENOSPC;
+	err = -ENOSPC; //-E2BIG;
 	bend = sbend(sb);
 	//if (LktrCond) bend = AUFS_BRANCH_MAX;
 	if (unlikely(AUFS_BRANCH_MAX <= add->bindex
@@ -386,7 +390,11 @@ static int test_add(struct super_block *sb, struct opt_add *add, int remount)
 			 != (inode->i_mode & S_IALLUGO)
 			 || hidden_inode->i_uid != inode->i_uid
 			 || hidden_inode->i_gid != inode->i_gid)))
-		Warn("different uid/gid/permission, %s\n", add->path);
+		Warn("uid/gid/perm %u/%u/0%o for %s (%u/%u/0%o)\n",
+		     inode->i_uid, inode->i_gid, (inode->i_mode & S_IALLUGO),
+		     add->path,
+		     hidden_inode->i_uid, hidden_inode->i_gid,
+		     (hidden_inode->i_mode & S_IALLUGO));
 
 	err = -EINVAL;
 	for (bindex = 0; bindex <= bend; bindex++)
@@ -514,76 +522,48 @@ int br_add(struct super_block *sb, struct opt_add *add, int remount)
 /*
  * test if the branch is deletable or not.
  */
-static int test_children(struct dentry *root, aufs_bindex_t bindex)
+static int test_children_busy(struct dentry *root, aufs_bindex_t bindex)
 {
-	int ret = 0;
-	struct dentry *this_parent = root;
-	struct list_head *next;
+	int err, i, j;
+	struct au_dcsub_pages dpages;
 
 	LKTRTrace("b%d\n", bindex);
 	SiMustWriteLock(root->d_sb);
 	DiMustWriteLock(root);
+
+	err = au_dpages_init(&dpages, GFP_KERNEL);
+	if (unlikely(err))
+		goto out;
+	err = au_dcsub_pages(&dpages, root, NULL, NULL);
+	if (unlikely(err))
+		goto out_dpages;
+
 	DiMustNoWaiters(root);
 	IiMustNoWaiters(root->d_inode);
 	di_write_unlock(root);
-
-	//spin_lock(&dcache_lock);
- repeat:
-	next = this_parent->d_subdirs.next;
- resume:
-	while (next != &this_parent->d_subdirs) {
-		struct list_head *tmp = next;
-		struct dentry *dentry = list_entry(tmp, struct dentry, D_CHILD);
-
-		next = tmp->next;
-		di_read_lock_child(dentry, AUFS_I_RLOCK);
-		if (!au_h_dptr_i(dentry, bindex)
-		    || d_unhashed(dentry)
-		    || !dentry->d_inode) {
-			di_read_unlock(dentry, AUFS_I_RLOCK);
-			continue;
+	for (i = 0; !err && i < dpages.ndpage; i++) {
+		struct au_dpage *dpage;
+		dpage = dpages.dpages + i;
+		for (j = 0; !err && j < dpage->ndentry; j++) {
+			struct dentry *d;
+			d = dpage->dentries[j];
+			di_read_lock_child(d, AUFS_I_RLOCK);
+			if (au_h_dptr_i(d, bindex)
+			    && (!S_ISDIR(d->d_inode->i_mode)
+				|| dbstart(d) == dbend(d)))
+				err = -EBUSY;
+			di_read_unlock(d, AUFS_I_RLOCK);
+			if (err)
+				LKTRTrace("%.*s\n", DLNPair(d));
 		}
-		if (!list_empty(&dentry->d_subdirs)) {
-			this_parent = dentry;
-			di_read_unlock(dentry, AUFS_I_RLOCK);
-			goto repeat;
-		}
-		if (!atomic_read(&dentry->d_count)
-		    || (S_ISDIR(dentry->d_inode->i_mode)
-			&& dbstart(dentry) != dbend(dentry))) {
-			di_read_unlock(dentry, AUFS_I_RLOCK);
-			continue;
-		}
-		//atomic_dec(&dentry->d_count);
-		//Dbg("%.*s\n", DLNPair(dentry));
-		ret = 1;
-		di_read_unlock(dentry, AUFS_I_RLOCK);
-		goto out;
 	}
-	if (this_parent != root) {
-		next = this_parent->D_CHILD.next;
-		di_read_lock_child(this_parent, AUFS_I_RLOCK);
-		//atomic_dec(&this_parent->d_count);
-		if (unlikely(au_h_dptr_i(this_parent, bindex)
-			     && atomic_read(&this_parent->d_count)
-			     && (!S_ISDIR(this_parent->d_inode->i_mode)
-				 || dbstart(this_parent) == dbend(this_parent))
-			    )) {
-			ret = 1;
-			di_read_unlock(this_parent, AUFS_I_RLOCK);
-			//Dbg("%.*s\n", DLNPair(this_parent));
-			goto out;
-		}
-		di_read_unlock(this_parent, AUFS_I_RLOCK);
-		this_parent = this_parent->d_parent;
-		goto resume;
-	}
-
- out:
 	di_write_lock_child(root); /* aufs_write_lock() calls ..._child() */
-	//spin_unlock(&dcache_lock);
-	TraceErr(ret);
-	return ret;
+
+ out_dpages:
+	au_dpages_free(&dpages);
+ out:
+	TraceErr(err);
+	return err;
 }
 
 int br_del(struct super_block *sb, struct opt_del *del, int remount)
@@ -639,8 +619,8 @@ int br_del(struct super_block *sb, struct opt_del *del, int remount)
 		do_wh = 1;
 	}
 
-	err = -EBUSY;
-	if (unlikely(test_children(root, bindex))) {
+	err = test_children_busy(root, bindex);
+	if (unlikely(err)) {
 		if (unlikely(do_wh))
 			goto out_wh;
 		goto out;
@@ -778,12 +758,14 @@ int br_mod(struct super_block *sb, struct opt_mod *mod, int remount,
 			di_write_unlock(root);
 
 			// no need file_list_lock() since sbinfo is locked
+			//file_list_lock();
 			list_for_each_entry(file, &sb->s_files, f_u.fu_list) {
 				LKTRTrace("%.*s\n", DLNPair(file->f_dentry));
 				fi_read_lock(file);
 				if (!S_ISREG(file->f_dentry->d_inode->i_mode)
 				    || !(file->f_mode & FMODE_WRITE)
 				    || fbstart(file) != bindex) {
+					FiMustNoWaiters(file);
 					fi_read_unlock(file);
 					continue;
 				}
@@ -792,8 +774,10 @@ int br_mod(struct super_block *sb, struct opt_mod *mod, int remount,
 				hf = au_h_fptr(file);
 				hf->f_flags = au_file_roflags(hf->f_flags);
 				hf->f_mode &= ~FMODE_WRITE;
+				FiMustNoWaiters(file);
 				fi_read_unlock(file);
 			}
+			//file_list_unlock();
 
 			/* aufs_write_lock() calls ..._child() */
 			di_write_lock_child(root);

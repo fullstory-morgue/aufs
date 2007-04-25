@@ -17,10 +17,11 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
-# $Id: def.mk,v 1.3 2007/03/12 01:54:55 sfjro Exp $
+# $Id: def.mk,v 1.4 2007/04/23 00:59:51 sfjro Exp $
 
 # kernel for diskless machines
-KVer = 2.6.20jrousDL
+KVer = 2.6.20.3jrousDL
+#KVer = 2.6.20jrousDL
 #KVer = 2.6.20-rc3jrousDL
 #KVer = 2.6.19jrousDL
 #KVer = 2.6.18jrousDL
