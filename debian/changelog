@@ -1,8 +1,36 @@
-aufs (0.0~20070425-2) UNRELEASED; urgency=low
+aufs (0.0~20070501-1) unstable; urgency=low
 
-  * NOT RELEASED YET
+  * New upstream release:
+    - bugfix: re-use inode->i_generation to support the enexpectedly
+      survived inodes after remount. test lower inodes in
+      hidden_d_revalidate(). simplified postproce() in
+      udba=inotify. introduce an internal generation for aufs_iinfo.
+      reported by Tomas M.
+      it is not finished yet and a hardlink on NFS branch will not work.
+    - bugfix: at deleting a branch, revalidate the survived dentries after
+      shrink dcache.
+    - bugfix: support the unhashed dentries, but ignore the unreferenced
+      dentries.
+    - bugfix: ii_read/write_unlock in an error path, mainly for NFS
+      branch.
+    - bugfix: revalidating the opened files after remount, introduce a new
+      function au_hfput().
+    - bugfix: maintain the reference of aufs module in case of the no-wait
+      task.
+    - introduce <sysfs>/fs/aufs/<mnt_id>/xino, and sysaufs.h. move some
+      declarations from module.h to sysaufs.h. rename del/add_sbilist() to
+      sysaufs_del/add(). refine sysaufs.c simply.
+    - CONFIG_AUFS_EXPORT in statically linked aufs depends upon
+      CONFIG_EXPORTFS=y, reported by Sandino Flores Moreno.
+    - call dget_parent() instead of accessing denrty->d_parent directly.
+    - convert some inline functions for debugging to macros, in order to
+      print the prefeable line number in a file.
+    - rename nfsd_lockdep_off/on() to au_...().
+    - supports IN_UNMOUNT, if it happens there must must be another bug.
+    - ignore whiteouted names in revalidating child files.
+    - rename init_export_op() to au_init_export_op().
 
- -- Stefan Lippers-Hollmann <s.l-h@gmx.de>  Wed, 25 Apr 2007 14:26:27 +0200
+ -- Stefan Lippers-Hollmann <s.l-h@gmx.de>  Tue, 01 May 2007 01:49:53 +0200
 
 aufs (0.0~20070425-1) unstable; urgency=low
 
@@ -42,12 +70,6 @@ aufs (0.0~20070425-1) unstable; urgency=low
       SimpleRWSem...
 
  -- Stefan Lippers-Hollmann <s.l-h@gmx.de>  Wed, 25 Apr 2007 14:23:37 +0200
-
-aufs (0.0~20070414-2) UNRELEASED; urgency=low
-
-  * NOT RELEASED YET
-
- -- Stefan Lippers-Hollmann <s.l-h@gmx.de>  Sat, 14 Apr 2007 01:52:32 +0200
 
 aufs (0.0~20070414-1) unstable; urgency=low
 

@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: vdir.c,v 1.19 2007/04/23 00:55:40 sfjro Exp $ */
+/* $Id: vdir.c,v 1.20 2007/04/30 05:43:57 sfjro Exp $ */
 
 #include "aufs.h"
 
@@ -409,16 +409,18 @@ struct fillvdir_arg {
 };
 
 static int fillvdir(void *__arg, const char *__name, int namelen, loff_t offset,
-		    filldir_ino_t hidden_ino, unsigned int d_type)
+		    filldir_ino_t h_ino, unsigned int d_type)
 {
 	struct fillvdir_arg *arg = __arg;
-	ino_t ino;
 	char *name = (void*)__name;
 	aufs_bindex_t bindex, bend;
+	struct xino xino;
+	struct super_block *sb;
 
 	LKTRTrace("%.*s, namelen %d, i" filldir_ino_fmt ", dt%u\n",
-		  namelen, name, namelen, hidden_ino, d_type);
+		  namelen, name, namelen, h_ino, d_type);
 
+	sb = arg->file->f_dentry->d_sb;
 	bend = arg->bindex;
 	arg->err = 0;
 	arg->called++;
@@ -430,10 +432,28 @@ static int fillvdir(void *__arg, const char *__name, int namelen, loff_t offset,
 					     namelen))
 				goto out; /* already exists or whiteouted */
 
-		arg->err = xino_read(arg->file->f_dentry->d_sb, bend,
-				     hidden_ino, &ino, 1);
+		arg->err = xino_read(sb, bend, h_ino, &xino);
+		if (!arg->err) {
+			//struct inode *h_inode;
+			if (!xino.ino)
+				xino.ino = xino_new_ino(sb);
+			if (unlikely(!xino.ino))
+				arg->err = -EIO;
+#if 0
+			//xino.h_gen = AuXino_INVALID_HGEN;
+			h_inode = ilookup(sbr_sb(sb, bend), h_ino);
+			if (h_inode) {
+				if (!is_bad_inode(h_inode)) {
+					xino.h_gen = h_inode->i_generation;
+					WARN_ON(xino.h_gen == AuXino_INVALID_HGEN);
+				}
+				iput(h_inode);
+			}
+#endif
+			arg->err = xino_write(sb, bend, h_ino, &xino);
+		}
 		if (!arg->err)
-			arg->err = append_de(arg->vdir, name, namelen, ino,
+			arg->err = append_de(arg->vdir, name, namelen, xino.ino,
 					     d_type, arg->delist + bend);
 	} else {
 		name += AUFS_WH_LEN;

@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: debug.h,v 1.28 2007/04/23 00:55:15 sfjro Exp $ */
+/* $Id: debug.h,v 1.29 2007/04/30 05:48:23 sfjro Exp $ */
 
 #ifndef __AUFS_DEBUG_H__
 #define __AUFS_DEBUG_H__
@@ -26,22 +26,19 @@
 #ifdef __KERNEL__
 
 #ifdef CONFIG_AUFS_DEBUG
-#define DEBUG_ON(a)	BUG_ON(a)
+#define DEBUG_ON(a)		BUG_ON(a)
 extern atomic_t aufs_cond;
-#define au_debug_on()	atomic_inc(&aufs_cond)
-#define au_debug_off()	atomic_dec(&aufs_cond)
-#define au_is_debug()	atomic_read(&aufs_cond)
+#define au_debug_on()		atomic_inc(&aufs_cond)
+#define au_debug_off()		atomic_dec(&aufs_cond)
+#define au_is_debug()		atomic_read(&aufs_cond)
 #else
-#define DEBUG_ON(a)	/* */
-#define au_debug_on()	/* */
-#define au_debug_off()	/* */
-#define au_is_debug()	0
+#define DEBUG_ON(a)		/* */
+#define au_debug_on()		/* */
+#define au_debug_off()		/* */
+#define au_is_debug()		0
 #endif
 
-static inline void MtxMustLock(struct mutex *mtx)
-{
-	DEBUG_ON(!mutex_is_locked(mtx));
-}
+#define MtxMustLock(mtx)	DEBUG_ON(!mutex_is_locked(mtx))
 
 /* ---------------------------------------------------------------------- */
 
@@ -111,6 +108,7 @@ void au_dpri_sb(struct super_block *sb);
 #define DbgDentry(d)		do{LKTRTrace(#d "\n"); au_dpri_dentry(d);}while(0)
 #define DbgFile(f)		do{LKTRTrace(#f "\n"); au_dpri_file(f);}while(0)
 #define DbgSb(sb)		do{LKTRTrace(#sb "\n"); au_dpri_sb(sb);}while(0)
+void DbgSleep(int sec);
 #else
 #define DbgWhlist(w)		/* */
 #define DbgVdir(v)		/* */
@@ -118,9 +116,8 @@ void au_dpri_sb(struct super_block *sb);
 #define DbgDentry(d)		/* */
 #define DbgFile(f)		/* */
 #define DbgSb(sb)		/* */
+#define DbgSleep(sec)		/* */
 #endif
-
-void DbgSleep(int nsec);
 
 #endif /* __KERNEL__ */
 #endif /* __AUFS_DEBUG_H__ */

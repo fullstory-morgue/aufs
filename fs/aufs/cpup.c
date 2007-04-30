@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: cpup.c,v 1.34 2007/04/23 00:55:05 sfjro Exp $ */
+/* $Id: cpup.c,v 1.35 2007/04/30 05:44:43 sfjro Exp $ */
 
 #include <asm/uaccess.h>
 #include "aufs.h"
@@ -105,6 +105,9 @@ void au_cpup_attr_all(struct inode *inode)
 	}
 	inode->i_blkbits = hidden_inode->i_blkbits;
 	au_cpup_attr_blksize(inode, hidden_inode);
+
+	/* tmpfs generation is too rough */
+	inode->i_generation = hidden_inode->i_generation;
 }
 
 /* ---------------------------------------------------------------------- */
@@ -299,10 +302,12 @@ static int cpup_entry(struct dentry *dentry, aufs_bindex_t bdst,
 	DEBUG_ON(!hidden_inode);
 
 	/* stop refrencing while we are creating */
+	//parent = dget_parent(dentry);
 	parent = dentry->d_parent;
 	dir = parent->d_inode;
 	hidden_dst = au_h_dptr_i(dentry, bdst);
 	DEBUG_ON(hidden_dst && hidden_dst->d_inode);
+	//hidden_parent = dget_parent(hidden_dst);
 	hidden_parent = hidden_dst->d_parent;
 	hidden_dir = hidden_parent->d_inode;
 	IMustLock(hidden_dir);
@@ -389,6 +394,8 @@ static int cpup_entry(struct dentry *dentry, aufs_bindex_t bdst,
 
 	if (do_dt)
 		dtime_revert(&dt, flags & CPUP_LOCKED_GHDIR);
+	//dput(parent);
+	//dput(hidden_parent);
 	TraceErr(err);
 	return err;
 }
@@ -402,7 +409,7 @@ int cpup_single(struct dentry *dentry, aufs_bindex_t bdst, aufs_bindex_t bsrc,
 		loff_t len, unsigned int flags)
 {
 	int err, rerr, isdir, dlgt;
-	struct dentry *hidden_src, *hidden_dst;
+	struct dentry *hidden_src, *hidden_dst, *parent;//, *h_parent;
 	struct inode *dst_inode, *hidden_dir, *inode, *src_inode;
 	struct super_block *sb;
 	aufs_bindex_t old_ibstart;
@@ -415,6 +422,8 @@ int cpup_single(struct dentry *dentry, aufs_bindex_t bdst, aufs_bindex_t bsrc,
 	DEBUG_ON(bsrc <= bdst);
 	hidden_dst = au_h_dptr_i(dentry, bdst);
 	DEBUG_ON(!hidden_dst || hidden_dst->d_inode);
+	//h_parent = dget_parent(hidden_dst);
+	//hidden_dir = h_parent->d_inode;
 	hidden_dir = hidden_dst->d_parent->d_inode;
 	IMustLock(hidden_dir);
 	hidden_src = au_h_dptr_i(dentry, bsrc);
@@ -432,15 +441,19 @@ int cpup_single(struct dentry *dentry, aufs_bindex_t bdst, aufs_bindex_t bsrc,
 			goto out;
 		}
 
-		hidden_src = lkup_plink(sb, bdst, inode);
-		err = PTR_ERR(hidden_src);
-		if (IS_ERR(hidden_src))
+		if (dst_inode->i_nlink) {
+			hidden_src = lkup_plink(sb, bdst, inode);
+			err = PTR_ERR(hidden_src);
+			if (IS_ERR(hidden_src))
+				goto out;
+			DEBUG_ON(!hidden_src->d_inode);
+			// vfs_link() does lock the inode
+			err = vfsub_link(hidden_src, hidden_dir, hidden_dst, dlgt);
+			dput(hidden_src);
 			goto out;
-		DEBUG_ON(!hidden_src->d_inode);
-		// vfs_link() does lock the inode
-		err = vfsub_link(hidden_src, hidden_dir, hidden_dst, dlgt);
-		dput(hidden_src);
-		goto out;
+		} else
+			/* udba work */
+			au_update_brange(inode, 1);
 	}
 
 	old_ibstart = ibstart(inode);
@@ -469,12 +482,16 @@ int cpup_single(struct dentry *dentry, aufs_bindex_t bdst, aufs_bindex_t bsrc,
 		    && src_inode->i_nlink > 1
 		    && au_flag_test(sb, AuFlag_PLINK))
 			append_plink(sb, inode, hidden_dst, bdst);
+		//goto out; /* success */
 		return 0; /* success */
 	}
 
 	/* revert */
 	i_unlock(dst_inode);
-	dtime_store(&dt, dentry->d_parent, hidden_dst->d_parent);
+	parent = dget_parent(dentry);
+	//dtime_store(&dt, parent, h_parent);
+	dtime_store(&dt, parent, hidden_dst->d_parent);
+	dput(parent);
 	if (!isdir)
 		rerr = vfsub_unlink(hidden_dir, hidden_dst, dlgt);
 	else
@@ -487,6 +504,7 @@ int cpup_single(struct dentry *dentry, aufs_bindex_t bdst, aufs_bindex_t bsrc,
 	}
 
  out:
+	//dput(h_parent);
 	TraceErr(err);
 	return err;
 }
@@ -593,11 +611,14 @@ int sio_cpup_simple(struct dentry *dentry, aufs_bindex_t bdst, loff_t len,
 		    unsigned int flags)
 {
 	int err, do_sio, dlgt;
+	//struct dentry *parent;
 	struct inode *hidden_dir, *dir;
 
 	LKTRTrace("%.*s, b%d, len %Ld, flags 0x%x\n",
 		  DLNPair(dentry), bdst, len, flags);
 
+	//parent = dget_parent(dentry);
+	//dir = parent->d_inode;
 	dir = dentry->d_parent->d_inode;
 	hidden_dir = au_h_iptr_i(dir, bdst);
 	dlgt = need_dlgt(dir->i_sb);
@@ -620,10 +641,12 @@ int sio_cpup_simple(struct dentry *dentry, aufs_bindex_t bdst, loff_t len,
 		au_wkq_wait(call_cpup_simple, &args, /*dlgt*/0);
 	}
 
+	//dput(parent);
 	TraceErr(err);
 	return err;
 }
 
+//todo: dcsub
 /* cf. revalidate function in file.c */
 int cpup_dirs(struct dentry *dentry, aufs_bindex_t bdst, struct dentry *locked)
 {
@@ -703,6 +726,7 @@ int cpup_dirs(struct dentry *dentry, aufs_bindex_t bdst, struct dentry *locked)
 			break;
 	}
 
+// out:
 	TraceErr(err);
 	return err;
 }

@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: branch.c,v 1.46 2007/04/23 00:53:40 sfjro Exp $ */
+/* $Id: branch.c,v 1.47 2007/04/30 05:44:15 sfjro Exp $ */
 
 //#include <linux/fs.h>
 //#include <linux/namei.h>
@@ -82,19 +82,21 @@ int br_rdonly(struct aufs_branch *br)
  */
 static int find_rw_parent(struct dentry *dentry, aufs_bindex_t bend)
 {
+	int err;
 	aufs_bindex_t bindex, candidate;
 	struct super_block *sb;
 	struct dentry *parent, *hidden_parent;
 
-	candidate = -1;
+	err = bend;
 	sb = dentry->d_sb;
-	parent = dentry->d_parent; // dget_parent()
+	parent = dget_parent(dentry);
 #if 1 // branch policy
 	hidden_parent = au_h_dptr_i(parent, bend);
 	if (hidden_parent && !br_rdonly(stobr(sb, bend)))
-		return bend;
+		goto out; /* success */
 #endif
 
+	candidate = -1;
 	for (bindex = dbstart(parent); bindex <= bend; bindex++) {
 		hidden_parent = au_h_dptr_i(parent, bindex);
 		if (hidden_parent && !br_rdonly(stobr(sb, bindex))) {
@@ -102,15 +104,22 @@ static int find_rw_parent(struct dentry *dentry, aufs_bindex_t bend)
 			if (candidate == -1)
 				candidate = bindex;
 			if (!au_test_perm(hidden_parent->d_inode, MAY_WRITE))
-#endif
 				return bindex;
+#endif
+			err = bindex;
+			goto out; /* success */
 		}
 	}
 #if 0 // branch policy
+	err = candidate;
 	if (candidate != -1)
-		return candidate;
+		goto out; /* success */
 #endif
-	return -EROFS;
+	err = -EROFS;
+
+ out:
+	dput(parent);
+	return err;
 }
 
 int find_rw_br(struct super_block *sb, aufs_bindex_t bend)
@@ -524,7 +533,7 @@ int br_add(struct super_block *sb, struct opt_add *add, int remount)
  */
 static int test_children_busy(struct dentry *root, aufs_bindex_t bindex)
 {
-	int err, i, j;
+	int err, i, j, sigen;
 	struct au_dcsub_pages dpages;
 
 	LKTRTrace("b%d\n", bindex);
@@ -538,6 +547,7 @@ static int test_children_busy(struct dentry *root, aufs_bindex_t bindex)
 	if (unlikely(err))
 		goto out_dpages;
 
+	sigen = au_sigen(root->d_sb);
 	DiMustNoWaiters(root);
 	IiMustNoWaiters(root->d_inode);
 	di_write_unlock(root);
@@ -546,8 +556,21 @@ static int test_children_busy(struct dentry *root, aufs_bindex_t bindex)
 		dpage = dpages.dpages + i;
 		for (j = 0; !err && j < dpage->ndentry; j++) {
 			struct dentry *d;
+
 			d = dpage->dentries[j];
-			di_read_lock_child(d, AUFS_I_RLOCK);
+			if (au_digen(d) == sigen)
+				di_read_lock_child(d, AUFS_I_RLOCK);
+			else {
+				di_write_lock_child(d);
+				err = au_reval_dpath(d, sigen);
+				if (!err)
+					di_downgrade_lock(d, AUFS_I_RLOCK);
+				else {
+					di_write_unlock(d);
+					break;
+				}
+			}
+
 			if (au_h_dptr_i(d, bindex)
 			    && (!S_ISDIR(d->d_inode->i_mode)
 				|| dbstart(d) == dbend(d)))

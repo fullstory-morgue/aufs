@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: sbinfo.c,v 1.27 2007/04/02 01:12:31 sfjro Exp $ */
+/* $Id: sbinfo.c,v 1.28 2007/04/30 05:46:44 sfjro Exp $ */
 
 #include "aufs.h"
 
@@ -55,6 +55,7 @@ int au_sigen_inc(struct super_block *sb)
 	SiMustWriteLock(sb);
 	gen = ++stosi(sb)->si_generation;
 	au_update_digen(sb->s_root);
+	au_update_iigen(sb->s_root->d_inode);
 	sb->s_root->d_inode->i_version++;
 	return gen;
 }
@@ -93,6 +94,7 @@ void aufs_read_unlock(struct dentry *dentry, int flags)
 
 void aufs_write_lock(struct dentry *dentry)
 {
+	//au_wkq_wait_nwtask();
 	si_write_lock(dentry->d_sb);
 	di_write_lock_child(dentry);
 }
@@ -101,6 +103,7 @@ void aufs_write_unlock(struct dentry *dentry)
 {
 	di_write_unlock(dentry);
 	si_write_unlock(dentry->d_sb);
+	//au_wkq_wait_nwtask();
 }
 
 void aufs_read_and_write_lock2(struct dentry *d1, struct dentry *d2, int isdir)
@@ -132,3 +135,39 @@ aufs_bindex_t new_br_id(struct super_block *sb)
 			return br_id;
 	}
 }
+
+/* ---------------------------------------------------------------------- */
+
+#ifdef CONFIG_AUFS_SYSAUFS
+static int make_xino(struct seq_file *seq, struct sysaufs_args *args,
+		    int *do_size)
+{
+	int err;
+	struct super_block *sb = args->sb;
+	aufs_bindex_t bindex, bend;
+	struct file *xf;
+	struct inode *xi;
+
+	TraceEnter();
+	DEBUG_ON(args->index != SysaufsSb_XINO);
+	SiMustReadLock(sb);
+
+	*do_size = 0;
+	err = seq_printf(seq, "%d %lu\n", sizeof(struct xino),
+			 atomic_long_read(&stosi(sb)->si_xino));
+	bend = sbend(sb);
+	for (bindex = 0; !err && bindex <= bend; bindex++) {
+		xf = stobr(sb, bindex)->br_xino;
+		xi = xf->f_dentry->d_inode;
+		err = seq_printf(seq, "%d: %d, %Lux%d %Ld\n",
+				 bindex, file_count(xf),
+				 (u64)xi->i_blocks, 1 << xi->i_blkbits,
+				 i_size_read(xi));
+	}
+	return err;
+}
+
+sysaufs_op au_si_ops[] = {
+	[SysaufsSb_XINO] = make_xino
+};
+#endif

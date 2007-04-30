@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: misc.h,v 1.23 2007/04/23 00:57:09 sfjro Exp $ */
+/* $Id: misc.h,v 1.24 2007/04/30 05:44:27 sfjro Exp $ */
 
 #ifndef __AUFS_MISC_H__
 #define __AUFS_MISC_H__
@@ -35,7 +35,10 @@ struct aufs_rwsem {
 	atomic_t		rcnt;
 #define rcnt_init(rw)		atomic_set(&(rw)->rcnt, 0)
 #define rcnt_inc(rw)		atomic_inc(&(rw)->rcnt)
-#define rcnt_dec(rw)		atomic_dec(&(rw)->rcnt)
+#define rcnt_dec(rw) do { \
+	atomic_dec(&(rw)->rcnt); \
+	WARN_ON(atomic_read(&(rw)->rcnt) < 0); \
+} while (0)
 #else
 #define rcnt_init(rw)		/* */
 #define rcnt_inc(rw)		/* */
@@ -67,17 +70,34 @@ static inline void rw_read_lock(struct aufs_rwsem *rw)
 	rcnt_inc(rw);
 }
 
+#if 0 // why is not _nested version defined
+static inline int rw_read_trylock(struct aufs_rwsem *rw)
+{
+	int ret = down_read_trylock(&rw->rwsem);
+	if (ret)
+		rcnt_inc(rw);
+	return ret;
+}
+#endif
+
 static inline void rw_read_lock_nested(struct aufs_rwsem *rw, unsigned int lsc)
 {
 	down_read_nested(&rw->rwsem, lsc);
 	rcnt_inc(rw);
 }
 
+#if 0
+#define rw_read_unlock(rw) do { \
+	rcnt_dec(rw); \
+	up_read(&(rw)->rwsem); \
+} while (0)
+#else
 static inline void rw_read_unlock(struct aufs_rwsem *rw)
 {
 	rcnt_dec(rw);
 	up_read(&rw->rwsem);
 }
+#endif
 
 static inline void rw_dgrade_lock(struct aufs_rwsem *rw)
 {
@@ -90,6 +110,13 @@ static inline void rw_write_lock(struct aufs_rwsem *rw)
 	down_write(&rw->rwsem);
 }
 
+#if 0 // why is not _nested version defined
+static inline int rw_write_trylock(struct aufs_rwsem *rw)
+{
+	return down_write_trylock(&rw->rwsem);
+}
+#endif
+
 static inline void rw_write_lock_nested(struct aufs_rwsem *rw, unsigned int lsc)
 {
 	down_write_nested(&rw->rwsem, lsc);
@@ -100,31 +127,21 @@ static inline void rw_write_unlock(struct aufs_rwsem *rw)
 	up_write(&rw->rwsem);
 }
 
-static inline void RwMustAnyLock(struct aufs_rwsem *rw)
-{
-	DEBUG_ON(down_write_trylock(&rw->rwsem));
-}
-
-static inline void RwMustReadLock(struct aufs_rwsem *rw)
-{
-	RwMustAnyLock(rw);
+#define RwMustNoWaiters(rw)	DEBUG_ON(!list_empty(&(rw)->rwsem.wait_list))
+#define RwMustAnyLock(rw)	DEBUG_ON(down_write_trylock(&(rw)->rwsem))
 #ifdef CONFIG_AUFS_DEBUG
-	DEBUG_ON(!atomic_read(&rw->rcnt));
+#define RwMustReadLock(rw) do { \
+	RwMustAnyLock(rw); \
+	DEBUG_ON(!atomic_read(&(rw)->rcnt)); \
+} while (0)
+#define RwMustWriteLock(rw) do { \
+	RwMustAnyLock(rw); \
+	DEBUG_ON(atomic_read(&(rw)->rcnt)); \
+} while (0)
+#else
+#define RwMustReadLock(rw)	RwMustAnyLock(rw)
+#define RwMustWriteLock(rw)	RwMustAnyLock(rw)
 #endif
-}
-
-static inline void RwMustWriteLock(struct aufs_rwsem *rw)
-{
-	RwMustAnyLock(rw);
-#ifdef CONFIG_AUFS_DEBUG
-	DEBUG_ON(atomic_read(&rw->rcnt));
-#endif
-}
-
-static inline void RwMustNoWaiters(struct aufs_rwsem *rw)
-{
-	DEBUG_ON(!list_empty(&rw->rwsem.wait_list));
-}
 
 #undef rcnt_init
 #undef rcnt_inc
@@ -133,6 +150,12 @@ static inline void RwMustNoWaiters(struct aufs_rwsem *rw)
 #define SimpleLockRwsemFuncs(prefix, param, rwsem) \
 static inline void prefix##_read_lock(param) {rw_read_lock(&(rwsem));} \
 static inline void prefix##_write_lock(param) {rw_write_lock(&(rwsem));}
+//static inline void prefix##_read_trylock(param) {rw_read_trylock(&(rwsem));}
+//static inline void prefix##_write_trylock(param) {rw_write_trylock(&(rwsem));}
+//static inline void prefix##_read_trylock_nested(param, lsc)
+//{rw_read_trylock_nested(&(rwsem, lsc));}
+//static inline void prefix##_write_trylock_nestd(param, lsc)
+//{rw_write_trylock_nested(&(rwsem), nested);}
 
 #define SimpleUnlockRwsemFuncs(prefix, param, rwsem) \
 static inline void prefix##_read_unlock(param) {rw_read_unlock(&(rwsem));} \

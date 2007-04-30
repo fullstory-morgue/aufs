@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: file.c,v 1.39 2007/04/23 00:56:06 sfjro Exp $ */
+/* $Id: file.c,v 1.40 2007/04/30 05:45:21 sfjro Exp $ */
 
 //#include <linux/fsnotify.h>
 #include <linux/pagemap.h>
@@ -272,6 +272,7 @@ static int cpup_wh_file(struct file *file, aufs_bindex_t bdst, loff_t len)
 	struct aufs_dinfo *dinfo;
 	struct dtime dt;
 	struct lkup_args lkup;
+	struct super_block *sb;
 
 	dentry = file->f_dentry;
 	LKTRTrace("%.*s, bdst %d, len %Lu\n", DLNPair(dentry), bdst, len);
@@ -286,8 +287,9 @@ static int cpup_wh_file(struct file *file, aufs_bindex_t bdst, loff_t len)
 	DEBUG_ON(!hidden_dir);
 	IMustLock(hidden_dir);
 
-	lkup.nfsmnt = au_nfsmnt(parent->d_sb, bdst);
-	lkup.dlgt = need_dlgt(parent->d_sb);
+	sb = parent->d_sb;
+	lkup.nfsmnt = au_nfsmnt(sb, bdst);
+	lkup.dlgt = need_dlgt(sb);
 	tmp_dentry = lkup_whtmp(hidden_parent, &dentry->d_name, &lkup);
 	//if (LktrCond) {dput(tmp_dentry); tmp_dentry = ERR_PTR(-1);}
 	err = PTR_ERR(tmp_dentry);
@@ -518,40 +520,41 @@ static int refresh_file(struct file *file, int (*reopen)(struct file *file))
 
 	p = finfo->fi_hfile;
 	if (!au_is_mmapped(file) && !d_unhashed(dentry)) {
-		bend = dbend(dentry);
-		if (bend < finfo->fi_bend)
-			bend = finfo->fi_bend;
-		//Dbg("%d\n", bend);
+		bend = sbend(sb);
 		for (finfo->fi_bstart = 0; finfo->fi_bstart <= bend;
 		     finfo->fi_bstart++, p++)
-			if (p->hf_file)
-				break;
+			if (p->hf_file) {
+				if (p->hf_file->f_dentry
+				    && p->hf_file->f_dentry->d_inode)
+					break;
+				else
+					au_hfput(p);
+			}
 	} else {
 		bend = find_brindex(sb, brid);
-		//Dbg("%d\n", bend);
+		//LKTRTrace("%d\n", bend);
 		for (finfo->fi_bstart = 0; finfo->fi_bstart < bend;
 		     finfo->fi_bstart++, p++)
-			if (p->hf_file) {
-				fput(p->hf_file);
-				p->hf_file = NULL;
-				DEBUG_ON(!p->hf_br);
-				br_put(p->hf_br);
-				p->hf_br = NULL;
-			}
-		bend = dbend(dentry);
-		if (bend < finfo->fi_bend)
-			bend = finfo->fi_bend;
-		//Dbg("%d\n", bend);
+			if (p->hf_file)
+				au_hfput(p);
+		//LKTRTrace("%d\n", finfo->fi_bstart);
+		bend = sbend(sb);
 	}
 
 	p = finfo->fi_hfile + bend;
 	for (finfo->fi_bend = bend; finfo->fi_bend >= finfo->fi_bstart;
 	     finfo->fi_bend--, p--)
-		if (p->hf_file)
-			break;
+		if (p->hf_file) {
+			if (p->hf_file->f_dentry
+			    && p->hf_file->f_dentry->d_inode)
+				break;
+			else
+				au_hfput(p);
+		}
 	//Dbg("%d, %d\n", finfo->fi_bstart, finfo->fi_bend);
 	DEBUG_ON(finfo->fi_bend < finfo->fi_bstart);
 	//DbgFile(file);
+	//DbgDentry(file->f_dentry);
 
 	err = 0;
 #if 0 // todo:

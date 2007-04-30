@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: hinotify.c,v 1.16 2007/04/23 00:56:29 sfjro Exp $ */
+/* $Id: hinotify.c,v 1.17 2007/04/30 05:45:49 sfjro Exp $ */
 
 #include "aufs.h"
 
@@ -256,12 +256,13 @@ static int reval_child(const char *name, struct dentry *parent)
 	const int len = strlen(name);
 
 	err = 0;
+	inode = NULL;
 	spin_lock(&dcache_lock);
 	list_for_each_entry(child, &parent->d_subdirs, d_u.d_child) {
-		inode = child->d_inode;
 		child_name = &child->d_name;
 		if (len == child_name->len
 		    && !memcmp(child_name->name, name, len)) {
+			inode = child->d_inode;
 			if (!inode || S_ISDIR(inode->i_mode)) {
 				//Dbg("%.*s\n", LNPair(child_name));
 #if 0
@@ -295,9 +296,11 @@ static void postproc(void *args)
 {
 	struct postproc_args *a = args;
 	struct super_block *sb;
-	aufs_bindex_t bindex, bstart, bend, bfound;
-	ino_t ino, h_ino;
-	int err;
+	//aufs_bindex_t bindex, bstart, bend, bfound;
+	//ino_t h_ino;
+	//int err;
+	struct aufs_vdir *vdir;
+	//struct xino xino;
 
 	//au_debug_on();
 	TraceEnter();
@@ -321,12 +324,9 @@ static void postproc(void *args)
 	}
 
 	/* make dir entries obsolete */
-	if (0 || !a->self) {
-		struct aufs_vdir *vdir;
-		vdir = ivdir(a->dir);
-		if (vdir)
-			vdir->vd_jiffy = 0;
-	}
+	vdir = ivdir(a->dir);
+	if (vdir)
+		vdir->vd_jiffy = 0;
 
 	/*
 	 * special handling root directory,
@@ -339,6 +339,7 @@ static void postproc(void *args)
 		goto out;
 	}
 
+#if 0
 	/* reset xino for hidden directories */
 	//if (!(a->mask & (IN_MOVE_SELF | IN_DELETE_SELF))
 	if (!a->self
@@ -358,9 +359,11 @@ static void postproc(void *args)
 	if (au_flag_test(sb, AuFlag_XINO) && a->dir->i_ino != AUFS_ROOT_INO) {
 		h_ino = a->h_dir->i_ino;
 		set_h_iptr(a->dir, bfound, NULL, /*flags*/0);
-		err = xino_read(sb, bfound, h_ino, &ino, /*force*/0);
-		if (!err && ino == h_ino)
-			xino_write(sb, bfound, h_ino, 0);
+		err = xino_read(sb, bfound, h_ino, &xino);
+		if (!err && xino.ino == h_ino) {
+			xino.ino = 0;
+			xino_write(sb, bfound, h_ino, &xino);
+		}
 		/* ignore an error */
 
 		if (bfound == bstart) {
@@ -368,7 +371,7 @@ static void postproc(void *args)
 				if (au_h_iptr_i(a->dir, bindex)) {
 					set_ibstart(a->dir, bindex);
 					break;
-			}
+				}
 			DEBUG_ON(!au_h_iptr(a->dir));
 		}
 		if (bfound == bend) {
@@ -403,6 +406,7 @@ static void postproc(void *args)
 			}
 		DEBUG_ON(!au_h_dptr_i(a->dentry, dbend(a->dentry)));
 	}
+#endif
 #endif
 
  out:
@@ -439,7 +443,7 @@ static void aufs_inotify(struct inotify_watch *watch, u32 wd, u32 mask,
 		  name ? name : "", h_inode ? h_inode->i_ino : 0);
 	//IMustLock(h_dir);
 
-	if (mask & IN_IGNORED) {
+	if (mask & (IN_IGNORED | IN_UNMOUNT)) {
 		put_inotify_watch(watch);
 		return;
 	}
@@ -465,7 +469,7 @@ static void aufs_inotify(struct inotify_watch *watch, u32 wd, u32 mask,
 
 	case IN_ACCESS:
 	default:
-		BUG();
+		DEBUG_ON(1);
 	}
 
 #ifdef DbgInotify
@@ -484,15 +488,16 @@ static void aufs_inotify(struct inotify_watch *watch, u32 wd, u32 mask,
 	/* iput() and dput() will be called in postproc() */
 	hinotify = container_of(watch, struct aufs_hinotify, hin_watch);
 	DEBUG_ON(!hinotify);
-	dir = igrab(hinotify->hin_aufs_inode);
-	if (!dir)
+	if (hinotify->hin_aufs_inode)
+		dir = igrab(hinotify->hin_aufs_inode);
+	else
 		return;
 
 	/* force re-lookup in next d_revalidate() */
 	parent = d_find_alias(dir);
 	if (parent) {
 		au_direval_inc(parent);
-		if (name)
+		if (name && strncmp(name, AUFS_WH_PFX, AUFS_WH_LEN))
 			reval_child(name, parent);
 #if 0
 		au_debug_on();
@@ -509,6 +514,13 @@ static void aufs_inotify(struct inotify_watch *watch, u32 wd, u32 mask,
 	args->mask = mask;
 	args->self = !!name;
 	au_wkq_nowait(postproc, args, /*dlgt*/0);
+}
+
+void hinotify_flush(struct super_block *sb)
+{
+	static DECLARE_WAIT_QUEUE_HEAD(wq);
+	atomic_t *p = &stosi(sb)->si_hinotify;
+	wait_event(wq, !atomic_read(p));
 }
 
 static void aufs_inotify_destroy(struct inotify_watch *watch)

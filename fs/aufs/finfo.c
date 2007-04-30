@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: finfo.c,v 1.22 2007/04/23 00:56:15 sfjro Exp $ */
+/* $Id: finfo.c,v 1.23 2007/04/30 05:45:21 sfjro Exp $ */
 
 #include "aufs.h"
 
@@ -111,6 +111,15 @@ void set_fvdir_cache(struct file *file, struct aufs_vdir *vdir_cache)
 	ftofi(file)->fi_vdir_cache = vdir_cache;
 }
 
+void au_hfput(struct aufs_hfile *hf)
+{
+	fput(hf->hf_file);
+	hf->hf_file = NULL;
+	DEBUG_ON(!hf->hf_br);
+	br_put(hf->hf_br);
+	hf->hf_br = NULL;
+}
+
 void set_h_fptr(struct file *file, aufs_bindex_t bindex, struct file *val)
 {
 	struct aufs_finfo *finfo = ftofi(file);
@@ -124,13 +133,8 @@ void set_h_fptr(struct file *file, aufs_bindex_t bindex, struct file *val)
 	DEBUG_ON(val && file_count(val) <= 0);
 	hf = finfo->fi_hfile + bindex;
 	DEBUG_ON(val && hf->hf_file);
-	if (hf->hf_file) {
-		fput(hf->hf_file);
-		hf->hf_file = NULL;
-		DEBUG_ON(!hf->hf_br);
-		br_put(hf->hf_br);
-		hf->hf_br = NULL;
-	}
+	if (hf->hf_file)
+		au_hfput(hf);
 	if (val) {
 		hf->hf_file = val;
 		hf->hf_br = stobr(file->f_dentry->d_sb, bindex);

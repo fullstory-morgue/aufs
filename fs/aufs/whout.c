@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: whout.c,v 1.11 2007/04/23 00:58:27 sfjro Exp $ */
+/* $Id: whout.c,v 1.12 2007/04/30 05:48:24 sfjro Exp $ */
 
 #include <linux/fs.h>
 #include <linux/namei.h>
@@ -818,6 +818,7 @@ int rmdir_whtmp(struct dentry *hidden_dentry, struct aufs_nhash *whlist,
 	int err;
 	struct inode *hidden_inode, *hidden_dir;
 	struct lkup_args lkup;
+	struct super_block *sb;
 
 	LKTRTrace("hd %.*s, b%d, i%lu\n",
 		  DLNPair(hidden_dentry), bindex, dir->i_ino);
@@ -826,8 +827,9 @@ int rmdir_whtmp(struct dentry *hidden_dentry, struct aufs_nhash *whlist,
 	hidden_dir = hidden_dentry->d_parent->d_inode;
 	IMustLock(hidden_dir);
 
-	lkup.nfsmnt = au_nfsmnt(inode->i_sb, bindex);
-	lkup.dlgt = need_dlgt(inode->i_sb);
+	sb = inode->i_sb;
+	lkup.nfsmnt = au_nfsmnt(sb, bindex);
+	lkup.dlgt = need_dlgt(sb);
 	hidden_inode = hidden_dentry->d_inode;
 	DEBUG_ON(hidden_inode != au_h_iptr_i(inode, bindex));
 	hdir2_lock(hidden_inode, inode, bindex);

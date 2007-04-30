@@ -16,34 +16,34 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: inode.c,v 1.20 2007/04/23 00:59:51 sfjro Exp $ */
+/* $Id: inode.c,v 1.21 2007/04/30 05:46:07 sfjro Exp $ */
 
 #include "aufs.h"
 
-int au_refresh_hinode(struct dentry *dentry)
+int au_refresh_hinode(struct inode *inode, struct dentry *dentry)
 {
 	int err, new_sz, update, isdir;
-	struct inode *inode, *first;
-	struct aufs_hinode *p;
+	struct inode *first;
+	struct aufs_hinode *p, *q, tmp;
 	struct super_block *sb;
 	struct aufs_iinfo *iinfo;
-	aufs_bindex_t bindex, bend;
+	aufs_bindex_t bindex, bend, new_bindex;
 	unsigned int flags;
 
 	LKTRTrace("%.*s\n", DLNPair(dentry));
-	inode = dentry->d_inode;
-	DEBUG_ON(!inode);
 	IiMustWriteLock(inode);
 
 	err = -ENOMEM;
 	sb = dentry->d_sb;
-	new_sz = sizeof(*iinfo->ii_hinode) * (sbend(sb) + 1);
+	bend = sbend(sb);
+	new_sz = sizeof(*iinfo->ii_hinode) * (bend + 1);
 	iinfo = itoii(inode);
 	p = au_kzrealloc(iinfo->ii_hinode, sizeof(*p) * (iinfo->ii_bend + 1),
 			 new_sz, GFP_KERNEL);
 	//p = NULL;
 	if (unlikely(!p))
 		goto out;
+
 	iinfo->ii_hinode = p;
 	err = 0;
 	update = 0;
@@ -51,9 +51,6 @@ int au_refresh_hinode(struct dentry *dentry)
 	first = p->hi_inode;
 	for (bindex = iinfo->ii_bstart; bindex <= iinfo->ii_bend;
 	     bindex++, p++) {
-		struct aufs_hinode *q, tmp;
-		aufs_bindex_t new_bindex;
-
 		if (unlikely(!p->hi_inode))
 			continue;
 
@@ -96,8 +93,13 @@ int au_refresh_hinode(struct dentry *dentry)
 		if (iinfo->ii_bstart <= bindex && bindex <= iinfo->ii_bend) {
 			hi = au_h_iptr_i(inode, bindex);
 			if (hi) {
-				DEBUG_ON(hi != hd->d_inode);
-				continue;
+				if (hi == hd->d_inode)
+					continue;
+
+				/* nfs inodes may not match */
+				WARN_ON(!au_is_nfs(hi->i_sb));
+				err = -ESTALE;
+				break;
 			}
 		}
 		if (bindex < iinfo->ii_bstart)
@@ -116,17 +118,21 @@ int au_refresh_hinode(struct dentry *dentry)
 			break;
 		}
 	p = iinfo->ii_hinode + bend;
-	//for (bindex = bend; bindex > iinfo->ii_bstart; bindex--, p--)
-	for (bindex = bend; bindex >= 0; bindex--, p--)
+	for (bindex = bend; bindex > iinfo->ii_bstart; bindex--, p--)
 		if (p->hi_inode) {
 			iinfo->ii_bend = bindex;
 			break;
 		}
+	DEBUG_ON(iinfo->ii_bstart > bend || iinfo->ii_bend < 0);
+
+	if (unlikely(err))
+		goto out;
 
 	if (first != au_h_iptr(inode))
 		au_cpup_attr_all(inode);
 	if (update && isdir)
 		inode->i_version++;
+	au_update_iigen(inode);
 
  out:
 	TraceErr(err);
@@ -205,10 +211,11 @@ struct inode *au_new_inode(struct dentry *dentry)
 {
 	struct inode *inode, *hidden_inode;
 	struct dentry *hidden_dentry;
-	ino_t hidden_ino, ino;
+	ino_t hidden_ino;
 	struct super_block *sb;
 	int err;
-	aufs_bindex_t bindex, bstart;
+	aufs_bindex_t bstart;
+	struct xino xino;
 
 	LKTRTrace("%.*s\n", DLNPair(dentry));
 	sb = dentry->d_sb;
@@ -219,17 +226,23 @@ struct inode *au_new_inode(struct dentry *dentry)
 
 	bstart = dbstart(dentry);
 	hidden_ino = hidden_inode->i_ino;
- new_ino:
-	err = xino_read(sb, bstart, hidden_ino, &ino, 1);
+	err = xino_read(sb, bstart, hidden_ino, &xino);
 	//err = -1;
 	inode = ERR_PTR(err);
 	if (unlikely(err))
 		goto out;
+ new_ino:
+	if (!xino.ino) {
+		xino.ino = xino_new_ino(sb);
+		if (!xino.ino) {
+			inode = ERR_PTR(-EIO);
+			goto out;
+		}
+	}
 
-	LKTRTrace("i%lu\n", ino);
+	LKTRTrace("i%lu\n", xino.ino);
 	err = -ENOMEM;
-	//inode = iget(sb, ino);
-	inode = iget_locked(sb, ino);
+	inode = iget_locked(sb, xino.ino);
 	if (unlikely(!inode))
 		goto out;
 	err = PTR_ERR(inode);
@@ -238,68 +251,48 @@ struct inode *au_new_inode(struct dentry *dentry)
 	err = -ENOMEM;
 	if (unlikely(is_bad_inode(inode)))
 		goto out_iput;
-	LKTRTrace("%lx, new %d\n", inode->i_state, !!(inode->i_state & I_NEW));
-	if (inode->i_state & I_NEW)
-		sb->s_op->read_inode(inode);
 
-	err = 0;
-	ii_write_lock_new(inode);
-	bindex = ibstart(inode);
+	LKTRTrace("%lx, new %d\n", inode->i_state, !!(inode->i_state & I_NEW));
 	if (inode->i_state & I_NEW) {
+		sb->s_op->read_inode(inode);
+		if (!is_bad_inode(inode))
+			ii_write_lock_new(inode);
+		else
+			goto out_iput;
 		err = set_inode(inode, dentry);
 		//err = -1;
 		unlock_new_inode(inode);
-#if 1 // test
-	} else if (unlikely(bindex >= 0
-			    /* && au_flag_test(sb, AuFlag_UDBA_INOTIFY) */)) {
-		int found = 0;
-		aufs_bindex_t bend = ibend(inode);
-
-		for (; !found && bindex <= bend; bindex++)
-			found = (hidden_inode == au_h_iptr_i(inode, bindex));
-
-		if (unlikely(!found)) {
+	} else if (inode->i_generation == hidden_inode->i_generation) {
+		/* tmpfs generation is too rough */
+		err = 0;
+		// todo: this is not a hidden inode.
+		hi_lock_child(inode);
+		ii_write_lock_new(inode);
+		if (1 || au_iigen(inode) != au_digen(dentry))
+			err = au_refresh_hinode(inode, dentry);
+		i_unlock(inode);
+#if 0
+		if (err == -ESTALE) {
 			ii_write_unlock(inode);
-			//todo: bug?
-			iput(inode);
-			err = xino_write(sb, bstart, hidden_ino, /*ino*/0);
-			if (unlikely(err))
-				goto out_iput;
-			//iput(inode);
-			goto new_ino;
-		}
-
-		if (S_ISDIR(inode->i_mode)) {
-			unsigned int flags = au_hi_flags(inode, /*isdir*/1);
-
-			bindex = dbstart(dentry);
-			bend = dbend(dentry);
-			for (; bindex <= bend; bindex++) {
-				hidden_dentry = au_h_dptr_i(dentry, bindex);
-				if (hidden_dentry && hidden_dentry->d_inode)
-					break;
+			xino.ino = 0;
+			err = xino_write(sb, bstart, hidden_ino, &xino);
+			if (!err) {
+				iput(inode);
+				goto new_ino;
 			}
-			if (bindex < ibstart(inode))
-				set_ibstart(inode, bindex);
-			for (; bend >= bindex; bend--) {
-				hidden_dentry = au_h_dptr_i(dentry, bend);
-				if (hidden_dentry && hidden_dentry->d_inode)
-					break;
-			}
-			if (ibend(inode) < bend)
-				set_ibend(inode, bend);
-
-			for (; bindex <= bend; bindex++) {
-				hidden_dentry = au_h_dptr_i(dentry, bindex);
-				if (hidden_dentry
-				    && hidden_dentry->d_inode
-				    && !au_h_iptr_i(inode, bindex))
-				set_h_iptr(inode, bindex,
-					   igrab(hidden_dentry->d_inode), flags);
-			}
+			goto out_iput;
 		}
 #endif
+	} else {
+		xino.ino = 0;
+		err = xino_write(sb, bstart, hidden_ino, &xino);
+		if (!err) {
+			iput(inode);
+			goto new_ino;
+		}
+		goto out_iput;
 	}
+
 	if (!err)
 		return inode; /* success */
 

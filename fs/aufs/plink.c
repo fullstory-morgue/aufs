@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: plink.c,v 1.2 2007/04/23 00:57:55 sfjro Exp $ */
+/* $Id: plink.c,v 1.3 2007/04/30 05:48:23 sfjro Exp $ */
 
 #include "aufs.h"
 
@@ -325,7 +325,6 @@ void half_refresh_plink(struct super_block *sb, aufs_bindex_t br_id)
 				do_put_plink(plink, 1);
 		}
 		ii_write_unlock(inode);
-		//todo: bug?
 		iput(inode);
 	}
 	//spin_unlock(&sbinfo->si_plink_lock);

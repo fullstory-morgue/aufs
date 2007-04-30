@@ -1,5 +1,5 @@
 
-/* $Id: Kconfig.in,v 1.6 2007/03/27 12:43:51 sfjro Exp $ */
+/* $Id: Kconfig.in,v 1.7 2007/04/30 05:43:22 sfjro Exp $ */
 
 #include <linux/version.h>
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,18)
@@ -23,6 +23,7 @@ comment "These options are generated automatically for "#UTS_RELEASE
 
 config AUFS_FAKE_DM
 	bool "Use simplified (fake) nameidata"
+	depends on AUFS
 	default y
 	help
 	Faking nameidata (VFS internal data), you can get better performance
@@ -34,6 +35,7 @@ config AUFS_FAKE_DM
 	an impact to performance.
 choice
 	prompt "Maximum number of branches"
+	depends on AUFS
 	default AUFS_BRANCH_MAX_127
 	help
 	HELP
@@ -59,6 +61,7 @@ endchoice
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,18)
 config AUFS_SYSAUFS
 	bool "Use <sysfs>/fs/aufs"
+	depends on AUFS
 	depends on SYSFS
 	default y
 	help
@@ -75,6 +78,7 @@ comment "SYSAUFS and AUFS_SYSAUFS are disabled"
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,18)
 config AUFS_HINOTIFY
 	bool "Use inotify to detect actions on a branch"
+	depends on AUFS
 	depends on INOTIFY
 	default n
 	help
@@ -91,7 +95,8 @@ comment "INOTIFY and AUFS_HINOTIFY are disabled"
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,18)
 config AUFS_EXPORT
 	bool "NFS-exportable aufs"
-	depends on EXPORTFS
+	depends on AUFS
+	depends on (AUFS = y && EXPORTFS = y) || (AUFS = m && EXPORTFS)
 	default n
 	help
 	If you want to export your mounted aufs, then enable this
@@ -99,12 +104,18 @@ config AUFS_EXPORT
 	See detail in aufs.5.
 
 comment "EXPORTFS and AUFS_EXPORT are disabled"
+	depends on AUFS
 	depends on EXPORTFS = n
+
+comment "AUFS_EXPORT is disabled since EXPORTFS is a module but AUFS"
+	depends on AUFS
+	depends on EXPORTFS = m && AUFS = y
 #endif
 
 #if 0
 config AUFS_DLGT
 	bool "Delegate the access to the branches from aufs to the kernel thread"
+	depends on AUFS
 	default n
 	help
 	If you want aufs to delegate the internal access to the
@@ -119,6 +130,7 @@ config AUFS_DLGT
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,16)
 config AUFS_KSIZE_PATCH
 	bool "ksize.patch was applied or not"
+	depends on AUFS
 	depends on AUFS = m
 	default n
 	help
@@ -132,6 +144,7 @@ config AUFS_KSIZE_PATCH
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,19)
 config AUFS_LHASH_PATCH
 	bool "lhash.patch for NFS branch was applied or not"
+	depends on AUFS
 	depends on NFS_FS
 	default n
 	help
@@ -142,11 +155,13 @@ config AUFS_LHASH_PATCH
 	exports it to modules.
 
 comment "NFS_FS and AUFS_LHASH_PATCH are disabled"
+	depends on AUFS
 	depends on NFS_FS = n
 #endif
 
 config AUFS_DEBUG
 	bool "Debug aufs"
+	depends on AUFS
 	default y
 	help
 	Enable this to compile aufs internal debug code.
@@ -154,6 +169,7 @@ config AUFS_DEBUG
 
 config AUFS_COMPAT
 	bool "Compatibility with Unionfs (obsolete)"
+	depends on AUFS
 	default n
 	help
 	This makes aufs compatible with unionfs-style mount options and some

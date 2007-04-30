@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: i_op_ren.c,v 1.35 2007/04/23 00:56:45 sfjro Exp $ */
+/* $Id: i_op_ren.c,v 1.36 2007/04/30 05:48:23 sfjro Exp $ */
 
 //#include <linux/fs.h>
 //#include <linux/namei.h>
@@ -167,6 +167,8 @@ static int do_rename(struct inode *src_dir, struct dentry *src_dentry,
 		hi_lock_child(a->hidden_dentry[SRC]->d_inode);
 		set_dbstart(src_dentry, a->btgt);
 		set_h_dptr(src_dentry, a->btgt, dget(a->hidden_dentry[DST]));
+		//DbgDentry(src_dentry);
+		//DbgInode(src_dentry->d_inode);
 		err = sio_cpup_single(src_dentry, a->btgt, a->bstart[SRC], -1,
 				      flags);
 		//err = -1; // untested dir
@@ -544,6 +546,9 @@ int aufs_rename(struct inode *src_dir, struct dentry *src_dentry,
 		//i_unlock(inode);
 	}
 
+#if 0
+	d_drop(src_dentry);
+#else
 	/* dput/iput all lower dentries */
 	set_dbwh(src_dentry, -1);
 	bend = dbend(src_dentry);
@@ -563,6 +568,7 @@ int aufs_rename(struct inode *src_dir, struct dentry *src_dentry,
 			set_h_iptr(inode, bindex, NULL, 0);
 	}
 	set_ibend(inode, p->a.btgt);
+#endif
 	goto out_children; /* success */
 
  out_dt:

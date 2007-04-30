@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: inode.h,v 1.29 2007/04/23 00:56:57 sfjro Exp $ */
+/* $Id: inode.h,v 1.30 2007/04/30 05:46:21 sfjro Exp $ */
 
 #ifndef __AUFS_INODE_H__
 #define __AUFS_INODE_H__
@@ -48,6 +48,7 @@ struct aufs_hinode {
 
 struct aufs_vdir;
 struct aufs_iinfo {
+	atomic_t		ii_generation;
 	struct aufs_rwsem	ii_rwsem;
 	aufs_bindex_t		ii_bstart, ii_bend;
 	struct aufs_hinode	*ii_hinode;
@@ -62,7 +63,7 @@ struct aufs_icntnr {
 /* ---------------------------------------------------------------------- */
 
 //inode.c
-int au_refresh_hinode(struct dentry *dentry);
+int au_refresh_hinode(struct inode *inode, struct dentry *dentry);
 struct inode *au_new_inode(struct dentry *dentry);
 
 //i_op.c
@@ -92,6 +93,7 @@ void aufs_hiput(struct aufs_hinode *hinode);
 unsigned int au_hi_flags(struct inode *inode, int isdir);
 void set_h_iptr(struct inode *inode, aufs_bindex_t bindex,
 		struct inode *h_inode, unsigned int flags);
+void au_update_iigen(struct inode *inode);
 void au_update_brange(struct inode *inode, int do_put_zero);
 
 int au_iinfo_init(struct inode *inode);
@@ -113,6 +115,13 @@ void append_plink(struct super_block *sb, struct inode *inode,
 		  struct dentry *h_dentry, aufs_bindex_t bindex);
 void au_put_plink(struct super_block *sb);
 void half_refresh_plink(struct super_block *sb, aufs_bindex_t br_id);
+
+/* ---------------------------------------------------------------------- */
+
+static inline int au_iigen(struct inode *inode)
+{
+	return atomic_read(&itoii(inode)->ii_generation);
+}
 
 /* ---------------------------------------------------------------------- */
 
@@ -150,10 +159,7 @@ static inline void hi_lock(struct inode *i, unsigned int lsc)
 	i_lock(i);
 }
 
-static inline void IMustLock(struct inode *i)
-{
-	DEBUG_ON(!down_trylock(&i->i_sem));
-}
+#define IMustLock(i)	DEBUG_ON(!down_trylock(&(i)->i_sem))
 #else
 static inline void i_lock(struct inode *i)
 {
@@ -175,10 +181,7 @@ static inline void hi_lock(struct inode *i, unsigned int lsc)
 	mutex_lock_nested(&i->i_mutex, lsc);
 }
 
-static inline void IMustLock(struct inode *i)
-{
-	MtxMustLock(&i->i_mutex);
-}
+#define IMustLock(i)	MtxMustLock(&(i)->i_mutex)
 #endif
 
 #define LockFunc(name, lsc) \
@@ -317,28 +320,22 @@ RWLockFuncs(new, NEW);
 
 SimpleUnlockRwsemFuncs(ii, struct inode *i, itoii(i)->ii_rwsem);
 
-static inline void IiMustReadLock(struct inode *i)
-{
-	SiMustAnyLock(i->i_sb);
-	RwMustReadLock(&itoii(i)->ii_rwsem);
-}
+#define IiMustReadLock(i) do { \
+	SiMustAnyLock((i)->i_sb); \
+	RwMustReadLock(&itoii(i)->ii_rwsem); \
+} while (0)
 
-static inline void IiMustWriteLock(struct inode *i)
-{
-	SiMustAnyLock(i->i_sb);
-	RwMustWriteLock(&itoii(i)->ii_rwsem);
-}
+#define IiMustWriteLock(i) do { \
+	SiMustAnyLock((i)->i_sb); \
+	RwMustWriteLock(&itoii(i)->ii_rwsem); \
+} while (0)
 
-static inline void IiMustAnyLock(struct inode *i)
-{
-	SiMustAnyLock(i->i_sb);
-	RwMustAnyLock(&itoii(i)->ii_rwsem);
-}
+#define IiMustAnyLock(i) do { \
+	SiMustAnyLock((i)->i_sb); \
+	RwMustAnyLock(&itoii(i)->ii_rwsem); \
+} while (0)
 
-static inline void IiMustNoWaiters(struct inode *i)
-{
-	RwMustNoWaiters(&itoii(i)->ii_rwsem);
-}
+#define IiMustNoWaiters(i)	RwMustNoWaiters(&itoii(i)->ii_rwsem)
 
 #endif /* __KERNEL__ */
 #endif /* __AUFS_INODE_H__ */
