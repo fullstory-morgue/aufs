@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: dcsub.c,v 1.1 2007/04/16 01:14:30 sfjro Exp $ */
+/* $Id: dcsub.c,v 1.2 2007/04/30 05:44:53 sfjro Exp $ */
 
 #include "aufs.h"
 
@@ -122,6 +122,8 @@ int au_dcsub_pages(struct au_dcsub_pages *dpages, struct dentry *root,
  resume:
 	if (this_parent->d_sb == sb
 	    && !IS_ROOT(this_parent)
+	    && atomic_read(&this_parent->d_count)
+	    && this_parent->d_inode
 	    && (!test || test(this_parent, arg))) {
 		err = au_dpages_append(dpages, this_parent, GFP_ATOMIC);
 		if (unlikely(err))
@@ -132,13 +134,14 @@ int au_dcsub_pages(struct au_dcsub_pages *dpages, struct dentry *root,
 		struct list_head *tmp = next;
 		struct dentry *dentry = list_entry(tmp, struct dentry, D_CHILD);
 		next = tmp->next;
-		if (d_unhashed(dentry) || !dentry->d_inode)
+		if (unlikely(/*d_unhashed(dentry) || */!dentry->d_inode))
 			continue;
 		if (!list_empty(&dentry->d_subdirs)) {
 			this_parent = dentry;
 			goto repeat;
 		}
 		if (dentry->d_sb == sb
+		    && atomic_read(&dentry->d_count)
 		    && (!test || test(dentry, arg))) {
 			err = au_dpages_append(dpages, dentry, GFP_ATOMIC);
 			if (unlikely(err))

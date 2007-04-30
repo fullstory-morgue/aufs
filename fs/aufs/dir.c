@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: dir.c,v 1.34 2007/04/23 00:55:26 sfjro Exp $ */
+/* $Id: dir.c,v 1.35 2007/04/30 05:45:08 sfjro Exp $ */
 
 #include "aufs.h"
 
@@ -274,7 +274,7 @@ static int aufs_readdir(struct file *file, void *dirent, filldir_t filldir)
 	inode = dentry->d_inode;
 	IMustLock(inode);
 
-	nfsd_lockdep_off();
+	au_nfsd_lockdep_off();
 	sb = dentry->d_sb;
 	si_read_lock(sb);
 	err = au_reval_and_lock_finfo(file, reopen_dir, /*wlock*/1,
@@ -284,8 +284,10 @@ static int aufs_readdir(struct file *file, void *dirent, filldir_t filldir)
 
 	ii_write_lock_child(inode);
 	err = au_init_vdir(file);
-	if (unlikely(err))
+	if (unlikely(err)) {
+		ii_write_unlock(inode);
 		goto out_unlock;
+	}
 	//DbgVdir(fvdir_cache(file));// goto out_unlock;
 
 	/* nfsd filldir calls lookup_one_len(). */
@@ -293,13 +295,18 @@ static int aufs_readdir(struct file *file, void *dirent, filldir_t filldir)
 	err = au_fill_de(file, dirent, filldir);
 	//DbgVdir(fvdir_cache(file));// goto out_unlock;
 
- out_unlock:
 	inode->i_atime = au_h_iptr(inode)->i_atime;
 	ii_read_unlock(inode);
+
+ out_unlock:
 	fi_write_unlock(file);
  out:
 	si_read_unlock(sb);
-	nfsd_lockdep_on();
+	au_nfsd_lockdep_on();
+#if 0 // debug
+	if (LktrCond)
+		igrab(inode);
+#endif
 	TraceErr(err);
 	return err;
 }

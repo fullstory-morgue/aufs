@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: debug.c,v 1.26 2007/04/23 00:55:15 sfjro Exp $ */
+/* $Id: debug.c,v 1.27 2007/04/30 05:48:23 sfjro Exp $ */
 
 #include "aufs.h"
 
@@ -92,14 +92,15 @@ static int do_pri_inode(aufs_bindex_t bindex, struct inode *inode)
 	/* the type of i_blocks depends upon CONFIG_LSF */
 	BUILD_BUG_ON(sizeof(inode->i_blocks) != sizeof(unsigned long)
 		     && sizeof(inode->i_blocks) != sizeof(u64));
-	dpri("i%d: i%lu, %s, cnt %d, nlink %u, mode 0%o, sz %Lu, blks %Lu,"
-	     " ctime %Ld, nrpages %lu\n",
+	dpri("i%d: i%lu, %s, cnt %d, nl %u, 0%o, sz %Lu, blk %Lu,"
+	     " ct %Ld, np %lu, st 0x%lx, g %x\n",
 	     bindex,
 	     inode->i_ino, inode->i_sb ? au_sbtype(inode->i_sb) : "??",
 	     atomic_read(&inode->i_count), inode->i_nlink, inode->i_mode,
 	     i_size_read(inode), (u64)inode->i_blocks,
 	     timespec_to_ns(&inode->i_ctime) & 0x0ffff,
-	     inode->i_mapping ? inode->i_mapping->nrpages : 0);
+	     inode->i_mapping ? inode->i_mapping->nrpages : 0,
+	     inode->i_state, inode->i_generation);
 	return 0;
 }
 
@@ -116,7 +117,8 @@ void au_dpri_inode(struct inode *inode)
 	iinfo = itoii(inode);
 	if (!iinfo)
 		return;
-	//dpri("i-1: bstart %d, bend %d\n", iinfo->ii_bstart, iinfo->ii_bend);
+	dpri("i-1: bstart %d, bend %d, gen %d\n",
+	     iinfo->ii_bstart, iinfo->ii_bend, au_iigen(inode));
 	if (iinfo->ii_bstart < 0)
 		return;
 	for (bindex = iinfo->ii_bstart; bindex <= iinfo->ii_bend; bindex++)
@@ -162,13 +164,18 @@ void au_dpri_dentry(struct dentry *dentry)
 
 static int do_pri_file(aufs_bindex_t bindex, struct file *file)
 {
+	char a[32];
+
 	if (!file || IS_ERR(file)) {
 		dpri("f%d: err %ld\n", bindex, PTR_ERR(file));
 		return -1;
 	}
-	dpri("f%d: mode 0x%x, flags 0%o, cnt %d, pos %Lu\n",
+	a[0] = 0;
+	if (bindex == -1 && ftofi(file))
+		snprintf(a, sizeof(a), ", mmapped %d", au_is_mmapped(file));
+	dpri("f%d: mode 0x%x, flags 0%o, cnt %d, pos %Lu%s\n",
 	     bindex, file->f_mode, file->f_flags, file_count(file),
-	     file->f_pos);
+	     file->f_pos, a);
 	do_pri_dentry(bindex, file->f_dentry);
 	return 0;
 }
@@ -247,9 +254,9 @@ void au_dpri_sb(struct super_block *sb)
 
 /* ---------------------------------------------------------------------- */
 
-void DbgSleep(int nsec)
+void DbgSleep(int sec)
 {
 	static DECLARE_WAIT_QUEUE_HEAD(wq);
-	Dbg("sleep %d sec\n", nsec);
-	wait_event_timeout(wq, 0, nsec * HZ);
+	Dbg("sleep %d sec\n", sec);
+	wait_event_timeout(wq, 0, sec * HZ);
 }

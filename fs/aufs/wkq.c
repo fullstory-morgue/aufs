@@ -16,8 +16,9 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: wkq.c,v 1.12 2007/04/23 00:58:37 sfjro Exp $ */
+/* $Id: wkq.c,v 1.13 2007/04/30 05:47:41 sfjro Exp $ */
 
+#include <linux/module.h>
 #include "aufs.h"
 
 struct au_wkq *au_wkq;
@@ -160,8 +161,10 @@ static AuWkqFunc(wkq_func, wk)
 	atomic_dec(wkinfo->busyp);
 	if (wkinfo->wait)
 		complete(wkinfo->comp);
-	else
+	else {
 		kfree(wkinfo);
+		module_put(THIS_MODULE);
+	}
 }
 
 void au_wkq_run(au_wkq_func_t func, void *args, int dlgt, int do_wait)
@@ -190,6 +193,7 @@ void au_wkq_run(au_wkq_func_t func, void *args, int dlgt, int do_wait)
 		wkinfo->func = func;
 		wkinfo->args = args;
 		wkinfo->comp = NULL;
+		__module_get(THIS_MODULE);
 	}
 
 	AuInitWkq(&wkinfo->wk, wkq_func);
@@ -201,6 +205,14 @@ void au_wkq_run(au_wkq_func_t func, void *args, int dlgt, int do_wait)
 	if (do_wait)
 		wait_for_completion(wkinfo->comp);
 }
+
+#if 0
+void au_wkq_wait_nwtask(void)
+{
+	static DECLARE_WAIT_QUEUE_HEAD(wq);
+	wait_event(wq, !atomic_read(&au_wkq[aufs_nwkq].busy));
+}
+#endif
 
 void au_wkq_fin(void)
 {

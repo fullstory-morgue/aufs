@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: dentry.c,v 1.38 2007/04/23 00:55:05 sfjro Exp $ */
+/* $Id: dentry.c,v 1.39 2007/04/30 05:44:43 sfjro Exp $ */
 
 //#include <linux/fs.h>
 //#include <linux/namei.h>
@@ -271,7 +271,7 @@ int lkup_dentry(struct dentry *dentry, aufs_bindex_t bstart, mode_t type)
 
 	LKTRTrace("%.*s, b%d, type 0%o\n", LNPair(name), bstart, type);
 	DEBUG_ON(bstart < 0 || IS_ROOT(dentry));
-	parent = dentry->d_parent;
+	parent = dget_parent(dentry);
 
 #if 1 //ndef CONFIG_AUFS_AS_BRANCH
 	err = -EPERM;
@@ -345,6 +345,7 @@ int lkup_dentry(struct dentry *dentry, aufs_bindex_t bstart, mode_t type)
  out_wh:
 	au_free_whname(&whname);
  out:
+	dput(parent);
 	TraceErr(err);
 	return err;
 }
@@ -390,7 +391,7 @@ int lkup_neg(struct dentry *dentry, aufs_bindex_t bindex)
 	struct lkup_args lkup;
 
 	LKTRTrace("%.*s, b%d\n", DLNPair(dentry), bindex);
-	parent = dentry->d_parent;
+	parent = dget_parent(dentry);
 	DEBUG_ON(!parent || !parent->d_inode
 		 || !S_ISDIR(parent->d_inode->i_mode));
 	hidden_parent = au_h_dptr_i(parent, bindex);
@@ -423,6 +424,7 @@ int lkup_neg(struct dentry *dentry, aufs_bindex_t bindex)
 	err = 0;
 
  out:
+	dput(parent);
 	TraceErr(err);
 	return err;
 }
@@ -445,7 +447,7 @@ int au_refresh_hdentry(struct dentry *dentry, mode_t type)
 	DiMustWriteLock(dentry);
 	sb = dentry->d_sb;
 	DEBUG_ON(IS_ROOT(dentry));
-	parent = dentry->d_parent; // dget_parent()
+	parent = dget_parent(dentry);
 	pgen = au_digen(parent);
 	sgen = au_sigen(sb);
 	dgen = au_digen(dentry);
@@ -468,18 +470,21 @@ int au_refresh_hdentry(struct dentry *dentry, mode_t type)
 	bdiropq = dinfo->di_bdiropq;
 	p += dinfo->di_bstart;
 	for (bindex = dinfo->di_bstart; bindex <= bend; bindex++, p++) {
-		struct dentry *hd;
+		struct dentry *hd, *hdp;
 		struct aufs_hdentry tmp, *q;
 		aufs_bindex_t new_bindex;
 
 		hd = p->hd_dentry;
 		if (!hd)
 			continue;
-		DEBUG_ON(!hd->d_inode);
-		if (hd->d_parent == au_h_dptr_i(parent, bindex)) // dget_parent()
+		hdp = dget_parent(hd);
+		if (hdp == au_h_dptr_i(parent, bindex)) {
+			dput(hdp);
 			continue;
+		}
 
-		new_bindex = au_find_dbindex(parent, hd->d_parent); // dget_parent()
+		new_bindex = au_find_dbindex(parent, hdp);
+		dput(hdp);
 		DEBUG_ON(new_bindex == bindex);
 		if (dinfo->di_bwh == bindex)
 			bwh = new_bindex;
@@ -544,6 +549,7 @@ int au_refresh_hdentry(struct dentry *dentry, mode_t type)
  out_dgen:
 	au_update_digen(dentry);
  out:
+	dput(parent);
 	TraceErr(npositive);
 	return npositive;
 }
@@ -560,6 +566,8 @@ static int hidden_d_revalidate(struct dentry *dentry, struct nameidata *nd)
 	int (*reval)(struct dentry *, struct nameidata *);
 
 	LKTRTrace("%.*s\n", DLNPair(dentry));
+	//DbgDentry(dentry);
+	//DbgInode(dentry->d_inode);
 
 	err = 0;
 	sb = dentry->d_sb;
@@ -626,6 +634,13 @@ static int hidden_d_revalidate(struct dentry *dentry, struct nameidata *nd)
 				err = -EINVAL;
 				break;
 			}
+			if (inode
+			    && (bindex < ibstart(inode)
+				|| ibend(inode) < bindex
+				|| hinode != au_h_iptr_i(inode, bindex))) {
+				err = -EINVAL;
+				break;
+			}
 		}
 	}
 #ifndef CONFIG_AUFS_FAKE_DM
@@ -653,11 +668,13 @@ static int simple_reval_dpath(struct dentry *dentry, int sgen)
 	int err;
 	mode_t type;
 	struct dentry *parent;
+	struct inode *inode;
 
 	LKTRTrace("%.*s, sgen %d\n", DLNPair(dentry), sgen);
 	SiMustAnyLock(dentry->d_sb);
 	DiMustWriteLock(dentry);
-	DEBUG_ON(!dentry->d_inode);
+	inode = dentry->d_inode;
+	DEBUG_ON(!inode);
 
 	if (!AufsGenOlder(au_digen(dentry), sgen))
 		return 0;
@@ -674,11 +691,11 @@ static int simple_reval_dpath(struct dentry *dentry, int sgen)
 		}
 	}
 #endif
-	type = dentry->d_inode->i_mode & S_IFMT;
+	type = (inode->i_mode & S_IFMT);
 	/* returns a number of positive dentries */
 	err = au_refresh_hdentry(dentry, type);
 	if (err >= 0)
-		err = au_refresh_hinode(dentry);
+		err = au_refresh_hinode(inode, dentry);
 	di_read_unlock(parent, AUFS_I_RLOCK);
 	dput(parent);
 	TraceErr(err);
@@ -689,6 +706,7 @@ int au_reval_dpath(struct dentry *dentry, int sgen)
 {
 	int err;
 	struct dentry *d, *parent;
+	struct inode *inode;
 
 	LKTRTrace("%.*s, sgen %d\n", DLNPair(dentry), sgen);
 	DEBUG_ON(!dentry->d_inode);
@@ -709,8 +727,9 @@ int au_reval_dpath(struct dentry *dentry, int sgen)
 			d = parent;
 		}
 
+		inode = d->d_inode;
 		if (d != dentry) {
-			//i_lock(d->d_inode);
+			//i_lock(inode);
 			di_write_lock_child(d);
 		}
 
@@ -718,18 +737,17 @@ int au_reval_dpath(struct dentry *dentry, int sgen)
 		if (AufsGenOlder(au_digen(d), sgen)) {
 			di_read_lock_parent(parent, AUFS_I_RLOCK);
 			/* returns a number of positive dentries */
-			err = au_refresh_hdentry(d,
-						 d->d_inode->i_mode & S_IFMT);
+			err = au_refresh_hdentry(d, inode->i_mode & S_IFMT);
 			//err = -1;
 			if (err >= 0)
-				err = au_refresh_hinode(d);
+				err = au_refresh_hinode(inode, d);
 			//err = -1;
 			di_read_unlock(parent, AUFS_I_RLOCK);
 		}
 
 		if (d != dentry) {
 			di_write_unlock(d);
-			//i_unlock(d->d_inode);
+			//i_unlock(inode);
 		}
 		if (unlikely(err))
 			break;
@@ -747,6 +765,7 @@ static int aufs_d_revalidate(struct dentry *dentry, struct nameidata *nd)
 {
 	int valid, sgen, err;
 	struct super_block *sb;
+	struct inode *inode;
 
 	LKTRTrace("dentry %.*s\n", DLNPair(dentry));
 	if (nd && nd->dentry)
@@ -780,14 +799,13 @@ static int aufs_d_revalidate(struct dentry *dentry, struct nameidata *nd)
 			goto out;
 	}
 
+	inode = dentry->d_inode;
 	sb = dentry->d_sb;
 	si_read_lock(sb);
 	sgen = au_sigen(dentry->d_sb);
 	if (au_digen(dentry) == sgen)
 		di_read_lock_child(dentry, AUFS_I_RLOCK);
 	else {
-		struct inode *inode;
-		inode = dentry->d_inode;
 		DEBUG_ON(!inode);
 		//i_lock(inode);
 		di_write_lock_child(dentry);
@@ -797,6 +815,14 @@ static int aufs_d_revalidate(struct dentry *dentry, struct nameidata *nd)
 		//i_unlock(inode);
 		if (unlikely(err))
 			goto out_unlock;
+	}
+
+	if (inode && au_iigen(inode) != sgen) {
+		//au_debug_on();
+		//DbgDentry(dentry);
+		//DbgInode(inode);
+		//au_debug_off();
+		goto out_unlock;
 	}
 
 #if 0 // fix it

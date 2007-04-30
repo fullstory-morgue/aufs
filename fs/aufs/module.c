@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: module.c,v 1.8 2007/04/23 00:57:20 sfjro Exp $ */
+/* $Id: module.c,v 1.9 2007/04/30 05:46:32 sfjro Exp $ */
 
 //#include <linux/init.h>
 //#include <linux/kobject.h>
@@ -315,6 +315,9 @@ module_exit(aufs_exit);
 #endif
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,18)
 #error CONFIG_AUFS_EXPORT requires linux-2.6.18 and later.
+#endif
+#if defined(CONFIG_EXPORTFS_MODULE) && defined(CONFIG_AUFS)
+#error need CONFIG_EXPORTFS=y to link aufs statically with CONFIG_AUFS_EXPORT
 #endif
 #endif
 

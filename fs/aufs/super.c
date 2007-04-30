@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: super.c,v 1.47 2007/04/23 00:58:07 sfjro Exp $ */
+/* $Id: super.c,v 1.48 2007/04/30 05:47:06 sfjro Exp $ */
 
 #include <linux/module.h>
 #include <linux/seq_file.h>
@@ -222,13 +222,10 @@ static void aufs_umount_begin(struct super_block *arg)
 {
 	struct super_block *sb = UmountBeginSb(arg);
 
-#if 0
-	// extra ref for initramfs
-	dput(sb->s_root); //dput(sb->s_root); dput(sb->s_root);
-#endif
 	if (unlikely(!stosi(sb)))
 		return;
 
+	//au_wkq_wait_nwtask();
 	si_write_lock(sb);
 	if (au_flag_test(sb, AuFlag_PLINK)) {
 		au_put_plink(sb);
@@ -241,16 +238,14 @@ static void aufs_umount_begin(struct super_block *arg)
 	si_write_unlock(sb);
 }
 
-static void free_sbinfo(struct aufs_sbinfo *sbinfo, int err)
+static void free_sbinfo(struct aufs_sbinfo *sbinfo)
 {
 	TraceEnter();
-	DEBUG_ON(!sbinfo);
-	DEBUG_ON(!list_empty(&sbinfo->si_plink));
+	DEBUG_ON(!sbinfo
+		 || !list_empty(&sbinfo->si_plink));
 
 	free_branches(sbinfo);
 	kfree(sbinfo->si_branch);
-	if (!err)
-		del_sbilist(sbinfo);
 	kfree(sbinfo);
 }
 
@@ -265,11 +260,13 @@ static void aufs_put_super(struct super_block *sb)
 	if (unlikely(!sbinfo))
 		return;
 
+	sysaufs_del(sbinfo);
+
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,18) && !defined(UbuntuEdgy17Umount18)
 	// umount_begin() may not be called.
 	aufs_umount_begin(sb);
 #endif
-	free_sbinfo(sbinfo, 0);
+	free_sbinfo(sbinfo);
 }
 
 /* ---------------------------------------------------------------------- */
@@ -292,7 +289,7 @@ static int do_refresh_dir(struct dentry *dentry, unsigned int flags)
 	di_read_lock_parent(parent, AUFS_I_RLOCK);
 	err = au_refresh_hdentry(dentry, S_IFDIR);
 	if (err >= 0) {
-		err = au_refresh_hinode(dentry);
+		err = au_refresh_hinode(inode, dentry);
 		if (!err)
 			au_reset_hinotify(inode, flags);
 	}
@@ -314,14 +311,13 @@ static int test_dir(struct dentry *dentry, void *arg)
 static int refresh_dir(struct dentry *root, int sgen)
 {
 	int err, i, j, ndentry;
-	struct super_block *sb = root->d_sb;
 	const unsigned int flags = au_hi_flags(root->d_inode, /*isdir*/1);
 	struct au_dcsub_pages dpages;
 	struct au_dpage *dpage;
 	struct dentry **dentries;
 
 	LKTRTrace("sgen %d\n", sgen);
-	SiMustWriteLock(sb);
+	SiMustWriteLock(root->d_sb);
 	DEBUG_ON(au_digen(root) != sgen);
 	DiMustWriteLock(root);
 
@@ -343,6 +339,7 @@ static int refresh_dir(struct dentry *root, int sgen)
 			struct dentry *d;
 			d = dentries[j];
 			DEBUG_ON(!S_ISDIR(d->d_inode->i_mode)
+				 || IS_ROOT(d)
 				 || au_digen(d->d_parent) != sgen);
 			if (au_digen(d) != sgen)
 				err = do_refresh_dir(d, flags);
@@ -509,7 +506,7 @@ static int alloc_sbinfo(struct super_block *sb)
 	sbinfo->si_flags = 0;
 	sbinfo->si_dirwh = AUFS_DIRWH_DEF;
 	sbinfo->si_rdcache = AUFS_RDCACHE_DEF * HZ;
-	//memset(&sbinfo->si_kobj, 0, sizeof(sbinfo->si_kobj));
+	atomic_set(&sbinfo->si_hinotify, 0);
 
 	sb->s_fs_info = sbinfo;
 	au_flag_set(sb, AuDefFlags);
@@ -606,7 +603,7 @@ static int aufs_fill_super(struct super_block *sb, void *raw_data, int silent)
 	/* all timestamps always follow the ones on the branch */
 	sb->s_flags |= MS_NOATIME | MS_NODIRATIME;
 	sb->s_op = &aufs_sop;
-	init_export_op(sb);
+	au_init_export_op(sb);
 	//err = kobj_mount(stosi(sb));
 	//if (err)
 	//goto out_info;
@@ -650,15 +647,10 @@ static int aufs_fill_super(struct super_block *sb, void *raw_data, int silent)
 		goto out_unlock;
 	DEBUG_ON(!sb->s_maxbytes);
 
-#if 0
-	// extra ref for initramfs
-	dget(root); //dget(root); dget(root);
-#endif
 	//DbgDentry(root);
 	aufs_write_unlock(root);
 	i_unlock(inode);
 	//DbgSb(sb);
-	add_sbilist(stosi(sb));
 	goto out_opts; /* success */
 
  out_unlock:
@@ -668,7 +660,7 @@ static int aufs_fill_super(struct super_block *sb, void *raw_data, int silent)
 	dput(root);
 	sb->s_root = NULL;
  out_info:
-	free_sbinfo(stosi(sb), err);
+	free_sbinfo(stosi(sb));
 	sb->s_fs_info = NULL;
  out_opts:
 	free_page((unsigned long)opts.opt);
@@ -692,8 +684,11 @@ static int aufs_get_sb(struct file_system_type *fs_type, int flags,
 	/* all timestamps always follow the ones on the branch */
 	//mnt->mnt_flags |= MNT_NOATIME | MNT_NODIRATIME;
 	err = get_sb_nodev(fs_type, flags, raw_data, aufs_fill_super, mnt);
-	if (!err)
-		stosi(mnt->mnt_sb)->si_mnt = mnt;
+	if (!err) {
+		struct aufs_sbinfo *sbinfo = stosi(mnt->mnt_sb);
+		sbinfo->si_mnt = mnt;
+		sysaufs_add(sbinfo);
+	}
 	return err;
 }
 #else

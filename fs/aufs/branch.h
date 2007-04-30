@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: branch.h,v 1.28 2007/04/16 01:14:58 sfjro Exp $ */
+/* $Id: branch.h,v 1.29 2007/04/30 05:44:26 sfjro Exp $ */
 
 #ifndef __AUFS_BRANCH_H__
 #define __AUFS_BRANCH_H__
@@ -210,23 +210,20 @@ struct vfsmount *au_nfsmnt(struct super_block *sb, aufs_bindex_t bindex)
 
 SimpleRwsemFuncs(br_wh, struct aufs_branch *br, br->br_wh_rwsem);
 
-static inline void BrWhMustReadLock(struct aufs_branch *br)
-{
-	/* SiMustAnyLock(sb); */
-	RwMustReadLock(&br->br_wh_rwsem);
-}
+#define BrWhMustReadLock(br) do { \
+	/* SiMustAnyLock(sb); */ \
+	RwMustReadLock(&(br)->br_wh_rwsem); \
+} while (0)
 
-static inline void BrWhMustWriteLock(struct aufs_branch *br)
-{
-	/* SiMustAnyLock(sb); */
-	RwMustWriteLock(&br->br_wh_rwsem);
-}
+#define BrWhMustWriteLock(br) do { \
+	/* SiMustAnyLock(sb); */ \
+	RwMustWriteLock(&(br)->br_wh_rwsem); \
+} while (0)
 
-static inline void BrWhMustAnyLock(struct aufs_branch *br)
-{
-	/* SiMustAnyLock(sb); */
-	RwMustAnyLock(&br->br_wh_rwsem);
-}
+#define BrWhMustAnyLock(br) do { \
+	/* SiMustAnyLock(sb); */ \
+	RwMustAnyLock(&(br)->br_wh_rwsem); \
+} while (0)
 
 #endif /* __KERNEL__ */
 #endif /* __AUFS_BRANCH_H__ */

@@ -16,38 +16,40 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: xino.c,v 1.24 2007/04/23 00:58:46 sfjro Exp $ */
+/* $Id: xino.c,v 1.25 2007/04/30 05:47:51 sfjro Exp $ */
 
 //#include <linux/fs.h>
 #include <linux/fsnotify.h>
 #include <asm/uaccess.h>
 #include "aufs.h"
 
-static readf_t find_readf(struct file *hidden_file)
+static readf_t find_readf(struct file *h_file)
 {
-	const struct file_operations *op = hidden_file->f_op;
+	const struct file_operations *fop = h_file->f_op;
 
-	if (op) {
-		if (op->read)
-			return op->read;
-		if (op->aio_read)
+	if (fop) {
+		if (fop->read)
+			return fop->read;
+		if (fop->aio_read)
 			return do_sync_read;
 	}
 	return ERR_PTR(-ENOSYS);
 }
 
-static writef_t find_writef(struct file *hidden_file)
+static writef_t find_writef(struct file *h_file)
 {
-	const struct file_operations *op = hidden_file->f_op;
+	const struct file_operations *fop = h_file->f_op;
 
-	if (op) {
-		if (op->write)
-			return op->write;
-		if (op->aio_write)
+	if (fop) {
+		if (fop->write)
+			return fop->write;
+		if (fop->aio_write)
 			return do_sync_write;
 	}
 	return ERR_PTR(-ENOSYS);
 }
+
+/* ---------------------------------------------------------------------- */
 
 static ssize_t xino_fread(readf_t func, struct file *file, void *buf,
 			  size_t size, loff_t *pos)
@@ -73,6 +75,8 @@ static ssize_t xino_fread(readf_t func, struct file *file, void *buf,
 	TraceErr(err);
 	return err;
 }
+
+/* ---------------------------------------------------------------------- */
 
 static ssize_t do_xino_fwrite(writef_t func, struct file *file, void *buf,
 			      size_t size, loff_t *pos)
@@ -145,6 +149,111 @@ static ssize_t xino_fwrite(writef_t func, struct file *file, void *buf,
 
 /* ---------------------------------------------------------------------- */
 
+/*
+ * write @ino to the xinofile for the specified branch{@sb, @bindex}
+ * at the position of @_ino.
+ * when @ino is zero, it is written to the xinofile and means no entry.
+ */
+int xino_write(struct super_block *sb, aufs_bindex_t bindex, ino_t h_ino,
+	       struct xino *xino)
+{
+	struct aufs_branch *br;
+	loff_t pos;
+	ssize_t sz;
+
+	LKTRTrace("b%d, hi%lu, i%lu\n", bindex, h_ino, xino->ino);
+	//DEBUG_ON(!xino->ino /* || !xino->h_gen */);
+	//WARN_ON(bindex == 0 && h_ino == 31);
+
+	if (unlikely(!au_flag_test(sb, AuFlag_XINO)))
+		return 0;
+
+	br = stobr(sb, bindex);
+	DEBUG_ON(!br || !br->br_xino);
+	pos = h_ino * sizeof(*xino);
+	sz = xino_fwrite(br->br_xino_write, br->br_xino, xino, sizeof(*xino),
+			 &pos);
+	//if (LktrCond) sz = 1;
+	if (sz == sizeof(*xino))
+		return 0; /* success */
+
+	IOErr("write failed (%ld)\n", (long)sz);
+	return -EIO;
+}
+
+// why is not atomic_long_inc_return defined?
+static DEFINE_SPINLOCK(alir_lock);
+static long atomic_long_inc_return(atomic_long_t *a)
+{
+	long l;
+
+	spin_lock(&alir_lock);
+	atomic_long_inc(a);
+	l = atomic_long_read(a);
+	spin_unlock(&alir_lock);
+	return l;
+}
+
+ino_t xino_new_ino(struct super_block *sb)
+{
+	ino_t ino;
+
+	TraceEnter();
+	ino = atomic_long_inc_return(&stosi(sb)->si_xino);
+	BUILD_BUG_ON(AUFS_FIRST_INO < AUFS_ROOT_INO);
+	if (ino >= AUFS_ROOT_INO)
+		return ino;
+	else {
+		atomic_long_dec(&stosi(sb)->si_xino);
+		IOErr1("inode number overflow\n");
+		return 0;
+	}
+}
+
+/*
+ * read @ino from xinofile for the specified branch{@sb, @bindex}
+ * at the position of @h_ino.
+ * if @ino does not exist and @do_new is true, get new one.
+ */
+int xino_read(struct super_block *sb, aufs_bindex_t bindex, ino_t h_ino,
+	      struct xino *xino)
+{
+	int err;
+	struct aufs_branch *br;
+	struct file *file;
+	loff_t pos;
+	ssize_t sz;
+
+	LKTRTrace("b%d, hi%lu\n", bindex, h_ino);
+
+	err = 0;
+	xino->ino = 0;
+	if (unlikely(!au_flag_test(sb, AuFlag_XINO)))
+		return 0; /* no ino */
+
+	br = stobr(sb, bindex);
+	file = br->br_xino;
+	DEBUG_ON(!file);
+	pos = h_ino * sizeof(*xino);
+	if (i_size_read(file->f_dentry->d_inode) < pos + sizeof(*xino))
+		return 0; /* no ino */
+
+	sz = xino_fread(br->br_xino_read, file, xino, sizeof(*xino), &pos);
+	if (sz == sizeof(*xino))
+		return 0; /* success */
+
+	err = sz;
+	if (unlikely(sz >= 0)) {
+		err = -EIO;
+		IOErr("xino read error (%ld)\n", (long)sz);
+	}
+
+	TraceErr(err);
+	return err;
+}
+
+/* ---------------------------------------------------------------------- */
+
 struct file *xino_create(struct super_block *sb, char *fname, int silent,
 			 struct dentry *parent)
 {
@@ -155,6 +264,7 @@ struct file *xino_create(struct super_block *sb, char *fname, int silent,
 	const int udba = au_flag_test(sb, AuFlag_UDBA_INOTIFY);
 
 	LKTRTrace("%s\n", fname);
+	//DEBUG_ON(!au_flag_test(sb, AuFlag_XINO));
 
 	// LSM may detect it
 	// use sio?
@@ -194,103 +304,6 @@ struct file *xino_create(struct super_block *sb, char *fname, int silent,
 	fput(file);
 	file = ERR_PTR(err);
 	return file;
-}
-
-/* ---------------------------------------------------------------------- */
-
-/*
- * write @ino to the xinofile for the specified branch{@sb, @bindex}
- * at the position of @hidden_ino.
- * when @ino is zero, it is written to the xinofile and means no entry.
- */
-int xino_write(struct super_block *sb, aufs_bindex_t bindex, ino_t hidden_ino,
-	       ino_t ino)
-{
-	struct aufs_branch *br;
-	loff_t pos;
-	ssize_t sz;
-
-	LKTRTrace("b%d, hi%lu, i%lu\n", bindex, hidden_ino, ino);
-
-	if (unlikely(!au_flag_test(sb, AuFlag_XINO)))
-		return 0;
-
-	br = stobr(sb, bindex);
-	DEBUG_ON(!br || !br->br_xino);
-	pos = hidden_ino * sizeof(hidden_ino);
-	sz = xino_fwrite(br->br_xino_write, br->br_xino, &ino, sizeof(ino),
-			 &pos);
-	//if (LktrCond) sz = 1;
-	if (sz == sizeof(ino))
-		return 0; /* success */
-
-	IOErr("write failed (%ld)\n", (long)sz);
-	return -EIO;
-}
-
-// why is not atomic_long_inc_return defined?
-#if BITS_PER_LONG == 64
-#define atomic_long_inc_return(a)	atomic64_inc_return(a)
-#else
-#define atomic_long_inc_return(a)	atomic_inc_return(a)
-#endif
-
-/*
- * read @ino from xinofile for the specified branch{@sb, @bindex}
- * at the position of @hidden_ino.
- * if @ino does not exist and @force is true, get new one.
- */
-int xino_read(struct super_block *sb, aufs_bindex_t bindex, ino_t hidden_ino,
-	      ino_t *ino, int force)
-{
-	struct file *file;
-	loff_t pos, pos2;
-	ssize_t sz;
-	struct aufs_branch *br;
-
-	LKTRTrace("b%d, hi%lu, force %d\n", bindex, hidden_ino, force);
-	if (unlikely(!au_flag_test(sb, AuFlag_XINO))) {
-		*ino = iunique(sb, AUFS_FIRST_INO);
-		if (*ino >= AUFS_FIRST_INO)
-			return 0;
-		goto out_overflow;
-	}
-
-	br = stobr(sb, bindex);
-	file = br->br_xino;
-	DEBUG_ON(!file);
-	sz = 0;
-	pos2 = pos = hidden_ino * sizeof(hidden_ino);
-	if (i_size_read(file->f_dentry->d_inode) >= pos + sizeof(*ino)) {
-		sz = xino_fread(br->br_xino_read, file, ino, sizeof(*ino), &pos);
-		//if (LktrCond) sz = 1;
-		if (sz == sizeof(*ino) && *ino)
-			return 0; /* success */
-	}
-	if (unlikely(!force))
-		goto out;
-
-	if (!sz || sz == sizeof(*ino)) {
-		*ino = atomic_long_inc_return(&stosi(sb)->si_xino);
-		if (*ino >= AUFS_FIRST_INO) {
-			sz = xino_fwrite(br->br_xino_write, file, ino,
-					 sizeof(*ino), &pos2);
-			//if (LktrCond) sz = 1;
-			if (sz == sizeof(ino))
-				return 0; /* success */
-			*ino = 0;
-			IOErr("write failed (%ld)\n", (long)sz);
-			return -EIO;
-		} else
-			goto out_overflow;
-	}
-	IOErr("read failed (%ld)\n", (long)sz);
- out:
-	return -EIO;
- out_overflow:
-	*ino = 0;
-	IOErr("inode number overflow\n");
-	goto out;
 }
 
 /*
@@ -388,6 +401,7 @@ int xino_init(struct super_block *sb, aufs_bindex_t bindex,
 	aufs_bindex_t bshared, bend;
 	struct file *file;
 	struct inode *inode, *hidden_inode;
+	struct xino xino;
 
 	LKTRTrace("b%d, base_file %p, do_test %d\n",
 		  bindex, base_file, do_test);
@@ -434,7 +448,10 @@ int xino_init(struct super_block *sb, aufs_bindex_t bindex,
 
 	inode = sb->s_root->d_inode;
 	hidden_inode = au_h_iptr_i(inode, bindex);
-	err = xino_write(sb, bindex, hidden_inode->i_ino, inode->i_ino);
+	xino.ino = inode->i_ino;
+	//xino.h_gen = hidden_inode->i_generation;
+	//WARN_ON(xino.h_gen == AuXino_INVALID_HGEN);
+	err = xino_write(sb, bindex, hidden_inode->i_ino, &xino);
 	//if (LktrCond) err = -1;
 	if (!err)
 		return 0; /* success */

@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: dentry.h,v 1.22 2007/03/27 12:46:12 sfjro Exp $ */
+/* $Id: dentry.h,v 1.23 2007/04/30 05:44:26 sfjro Exp $ */
 
 #ifndef __AUFS_DENTRY_H__
 #define __AUFS_DENTRY_H__
@@ -185,28 +185,22 @@ RWLockFuncs(parent3, PARENT3);
 #undef WriteLockFunc
 #undef RWLockFunc
 
-static inline void DiMustReadLock(struct dentry *d)
-{
-	SiMustAnyLock(d->d_sb);
-	RwMustReadLock(&dtodi(d)->di_rwsem);
-}
+#define DiMustReadLock(d) do { \
+	SiMustAnyLock((d)->d_sb); \
+	RwMustReadLock(&dtodi(d)->di_rwsem); \
+} while (0)
 
-static inline void DiMustWriteLock(struct dentry *d)
-{
-	SiMustAnyLock(d->d_sb);
-	RwMustWriteLock(&dtodi(d)->di_rwsem);
-}
+#define DiMustWriteLock(d) do { \
+	SiMustAnyLock((d)->d_sb); \
+	RwMustWriteLock(&dtodi(d)->di_rwsem); \
+} while (0)
 
-static inline void DiMustAnyLock(struct dentry *d)
-{
-	SiMustAnyLock(d->d_sb);
-	RwMustAnyLock(&dtodi(d)->di_rwsem);
-}
+#define DiMustAnyLock(d) do { \
+	SiMustAnyLock((d)->d_sb); \
+	RwMustAnyLock(&dtodi(d)->di_rwsem); \
+} while (0)
 
-static inline void DiMustNoWaiters(struct dentry *d)
-{
-	RwMustNoWaiters(&dtodi(d)->di_rwsem);
-}
+#define DiMustNoWaiters(d)	RwMustNoWaiters(&dtodi(d)->di_rwsem)
 
 #endif /* __KERNEL__ */
 #endif /* __AUFS_DENTRY_H__ */

@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: iinfo.c,v 1.28 2007/04/23 00:59:51 sfjro Exp $ */
+/* $Id: iinfo.c,v 1.29 2007/04/30 05:46:06 sfjro Exp $ */
 
 //#include <linux/mm.h>
 #include "aufs.h"
@@ -125,30 +125,35 @@ unsigned int au_hi_flags(struct inode *inode, int isdir)
 }
 
 void set_h_iptr(struct inode *inode, aufs_bindex_t bindex,
-		struct inode *val, unsigned int flags)
+		struct inode *h_inode, unsigned int flags)
 {
 	struct aufs_hinode *hinode;
 	struct inode *hi;
 
 	LKTRTrace("i%lu, b%d, hi%lu, flags 0x%x\n",
-		  inode->i_ino, bindex, val ? val->i_ino : 0, flags);
-
+		  inode->i_ino, bindex, h_inode ? h_inode->i_ino : 0, flags);
+	IiMustWriteLock(inode);
 	hinode = itoii(inode)->ii_hinode + bindex;
 	hi = hinode->hi_inode;
-	IiMustWriteLock(inode);
 	DEBUG_ON(bindex < ibstart(inode) || ibend(inode) < bindex
-		 || (val && atomic_read(&val->i_count) <= 0)
-		 || (val && hi));
-	if (!val && hi)
+		 || (h_inode && atomic_read(&h_inode->i_count) <= 0)
+		 || (h_inode && hi));
+
+	if (hi)
 		aufs_hiput(hinode);
-	hinode->hi_inode = val;
-	if (val) {
+	hinode->hi_inode = h_inode;
+	if (h_inode) {
 		int err;
 		struct super_block *sb = inode->i_sb;
 
 		hinode->hi_id = sbr_id(sb, bindex);
 		if (flags & AUFS_HI_XINO) {
-			err = xino_write(sb, bindex, val->i_ino, inode->i_ino);
+			struct xino xino = {
+				.ino	= inode->i_ino,
+				//.h_gen	= h_inode->i_generation
+			};
+			//WARN_ON(xino.h_gen == AuXino_INVALID_HGEN);
+			err = xino_write(sb, bindex, h_inode->i_ino, &xino);
 			if (unlikely(err)) {
 				IOErr1("failed xino_write() %d, force noxino\n",
 				       err);
@@ -156,13 +161,20 @@ void set_h_iptr(struct inode *inode, aufs_bindex_t bindex,
 			}
 		}
 		if (flags & AUFS_HI_NOTIFY) {
-			err = alloc_hinotify(hinode, inode, val);
+			err = alloc_hinotify(hinode, inode, h_inode);
 			if (unlikely(err))
 				IOErr1("alloc_hinotify() %d\n", err);
 			else
 				DEBUG_ON(!hinode->hi_notify);
 		}
 	}
+}
+
+void au_update_iigen(struct inode *inode)
+{
+	//IiMustWriteLock(inode);
+	DEBUG_ON(!inode->i_sb);
+	atomic_set(&itoii(inode)->ii_generation, au_sigen(inode->i_sb));
 }
 
 /* it may be called at remount time, too */
@@ -223,6 +235,7 @@ int au_iinfo_init(struct inode *inode)
 	if (iinfo->ii_hinode) {
 		for (i = 0; i < nbr; i++)
 			iinfo->ii_hinode[i].hi_id = -1;
+		atomic_set(&iinfo->ii_generation, au_sigen(sb));
 		rw_init_nolock(&iinfo->ii_rwsem);
 		iinfo->ii_bstart = -1;
 		iinfo->ii_bend = -1;

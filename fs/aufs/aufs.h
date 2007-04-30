@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: aufs.h,v 1.21 2007/04/16 01:14:30 sfjro Exp $ */
+/* $Id: aufs.h,v 1.22 2007/04/30 05:43:57 sfjro Exp $ */
 
 #ifndef __AUFS_H__
 #define __AUFS_H__
@@ -79,6 +79,7 @@
 #include "module.h"
 #include "opts.h"
 #include "super.h"
+#include "sysaufs.h"
 #include "vfsub.h"
 #include "whout.h"
 #include "wkq.h"

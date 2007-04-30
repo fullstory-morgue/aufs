@@ -276,7 +276,8 @@ If you enable CONFIG_SYSFS, you can check this value through
 <sysfs>/module/aufs/parameters/nwkq.
 
 So how many threads is enough? You can check it by
-<sysfs>/fs/aufs/stat. It shows the maximum number of the enqueued work
+<sysfs>/fs/aufs/stat, if you enable CONFIG_AUFS_SUSAUFS too.
+It shows the maximum number of the enqueued work
 at a time per a thread. Usually they are all small numbers or
 0. If your workload is heavy
 and you feel the response is low, then check these values. If there
@@ -330,6 +331,9 @@ are not allowed.
 Any filesystem can be a branch, but aufs and unionfs.
 If you specify aufs or unionfs as a branch, aufs will return an error
 saying it is overlapped or nested.
+
+A branch should not be shared as the writable branch of multiple
+aufs. A readonly branch can be shared.
 
 The maximum number of branches is configurable at compile time.
 The current value is \*[AUFS_BRANCH_MAX].
@@ -391,7 +395,7 @@ to put xino files on other than flash memory by specifing 'xino='
 monut option.
 The
 maximum file size will be 'max inode number on the branch x size of an
-inode number'. For example,
+inode number'. For example in 32bit environment,
 
 .nf
 $ df -i /branch_fs
@@ -399,12 +403,38 @@ $ df -i /branch_fs
 .fi
 
 and /branch_fs is an branch of the aufs, the maximum xino file size for
-/branch_fs will be 2,599,968 x 8 bytes = about 20 MB. But it might not be
+/branch_fs will be 2,599,968 x 4 bytes = about 10 MB. But it might not be
 allocated all of disk blocks.
 
 The xino files are always hidden, i.e. removed. So you cannot do 'ls -l
-xino_file'. Instead, you can check it through /proc/fs/aufs/xino. (not
-implemented).
+xino_file'.
+If you enable CONFIG_AUFS_SYSAUFS, you can check these information through
+<sysfs>/fs/aufs/<mnt_id>/xino.
+The first number in <sysfs>/fs/aufs/<mnt_id>/xino is the size of one
+entry in a xino file.
+The width of an inode number is
+unsigned long, so this is a time-bomb potentially.
+And the second number is the last inode number aufs assigned.
+When you access a file under aufs which was never ever been accessed
+through aufs, aufs will assign the next inode number to it.
+The rests are hidden xino file information in the format of,
+
+.nf
+<branch index>: <file cont>, <blocks>x<block size> <file size>
+.fi
+
+If the file count is larger than 1, it means some of your branches are
+on the same filesystem and the xino file is shared by them.
+
+Note that the file size may not be equal to the actual consuming blocks
+since xino file is a sparse file, i.e. a hole in a file which doesn't
+consume any disk blocks. Also a filesystem usually has a
+feature called pre-allocation, which means the additional number of
+blocks may be allocated automatically and then deallocated
+silently. You don't have to be surprised the changing of the number of
+blocks, when your filesystem which xino files are placed supports the
+pre-allocation feature.
+
 Once you unmount aufs, the xino files for that aufs are totally gone.
 It means that the inode number is not permanent.
 
@@ -627,6 +657,9 @@ access time (at d_revalidate time) whether UDBA was happened or not.
 Aufs trusts the dentry and the inode cache on the system, and never
 test about UDBA. With this option, aufs runs fastest, but it may show
 you incorrect data.
+Additionally, if you often modify a branch
+directly, aufs will not be able to trace the changes of inodes on the
+branch. It can be a cause of wrong behaviour, deadlock or anything else.
 
 It is recommended to use this option only when you are sure that
 nobody access a file on a branch.
@@ -662,7 +695,7 @@ want to show the hidden branches again, unmount the bound
 Aufs tests only the existence of the file which existed. If
 the existed file was removed on the branch directly, aufs
 discard the cache about the file and
-re-lookup. So the data will be updated.
+re-lookup it. So the data will be updated.
 This test is at minimum level to keep the performance and ensure the
 existence of a file.
 This is default and aufs runs still fast.
@@ -694,6 +727,8 @@ Todo: If aufs also tests the name, we can detect this case.
 If your outer modification (UDBA) is rare and you can ignore the
 temporary and minor differences between virtual aufs world and real
 branch filesystem, then try this mount option.
+.\" And when you modify a branch directly, set udba=inotify temporary
+.\" before the modification and set udba=reval again after that.
 .
 .TP
 .B udba=inotify
@@ -704,8 +739,8 @@ damaged, but it is most strict option.
 There are some limitations of linux inotify, see also Inotify
 Limitation.
 
-When a user access the file which was notified UDBA before, the cached data
-about the file will be discarded and aufs re-lookup. So the data will
+When a user accesses the file which was notified UDBA before, the cached data
+about the file will be discarded and aufs re-lookup it. So the data will
 be updated.
 To use this option, you need linux-2.6.18 and later, and need to
 enable CONFIG_INOTIFY and CONFIG_AUFS_UDBA_INOTIFY.
@@ -1005,6 +1040,10 @@ different uid/gid/permission, /ro
 .\" # mount -v -o remount,add:1:/new/b=rw,prepend:/new/a,mod:/rw=ro /u
 .\" none on /u type aufs (rw,xino=/rw/.aufs.xino,br:/new/a=rw:/rw=ro:/new/b=rw:/ro=ro)
 .\" .fi
+
+When you use aufs as root filesystem, it is recommended to consider to
+exclude some directories. For example, /tmp and /var/log are not need
+to stack in many cases. They don't usually need to copyup or to whiteout.
 
 And there is a good sample which is for network booted diskless machines. See
 sample/ in detail.

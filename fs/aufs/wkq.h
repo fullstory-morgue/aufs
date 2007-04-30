@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: wkq.h,v 1.7 2007/04/23 01:01:16 sfjro Exp $ */
+/* $Id: wkq.h,v 1.8 2007/04/30 05:48:24 sfjro Exp $ */
 
 #ifndef __AUFS_WKQ_H__
 #define __AUFS_WKQ_H__
@@ -48,6 +48,7 @@ typedef void (*work_func_t)(void *arg);
 extern struct au_wkq *au_wkq;
 
 void au_wkq_run(au_wkq_func_t func, void *args, int dlgt, int do_wait);
+//void au_wkq_wait_nwtask(void);
 int __init au_wkq_init(void);
 void au_wkq_fin(void);
 

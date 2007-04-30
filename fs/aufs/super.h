@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: super.h,v 1.41 2007/04/16 01:14:58 sfjro Exp $ */
+/* $Id: super.h,v 1.42 2007/04/30 05:47:25 sfjro Exp $ */
 
 #ifndef __AUFS_SUPER_H__
 #define __AUFS_SUPER_H__
@@ -25,11 +25,23 @@
 #include <linux/version.h>
 #include <linux/aufs_type.h>
 #include "misc.h"
+#include "sysaufs.h"
 
 #define AUFS_ROOT_INO		2
 #define AUFS_FIRST_INO		11
 
 #ifdef __KERNEL__
+
+#ifdef CONFIG_AUFS_SYSAUFS
+enum {SysaufsSb_XINO, SysaufsSb_Last};
+struct sysaufs_sbinfo {
+	struct subsystem	subsys;
+	struct sysaufs_entry	array[SysaufsSb_Last];
+};
+extern sysaufs_op au_si_ops[];
+#else
+struct sysaufs_sbinfo {};
+#endif
 
 struct aufs_sbinfo {
 	struct aufs_rwsem	si_rwsem;
@@ -76,9 +88,10 @@ struct aufs_sbinfo {
 #endif
 
 	/* sysfs */
-	struct kobject		si_kobj;
+	struct sysaufs_sbinfo	si_sysaufs;
 
 	/* hinotify */
+	atomic_t		si_hinotify;
 	atomic_t		si_reval_root;
 	wait_queue_t		si_reval_root_wq;
 
@@ -88,6 +101,14 @@ struct aufs_sbinfo {
 	struct list_head	si_lvma;
 #endif
 };
+
+/* an entry of xino file */
+struct xino {
+	ino_t ino;
+	//__u32 h_gen;
+} __attribute__ ((packed));
+
+#define AuXino_INVALID_HGEN	(-1)
 
 /* ---------------------------------------------------------------------- */
 
@@ -139,10 +160,11 @@ int au_show_brs(struct seq_file *seq, struct super_block *sb);
 //xino.c
 struct file *xino_create(struct super_block *sb, char *fname, int silent,
 			 struct dentry *parent);
+ino_t xino_new_ino(struct super_block *sb);
 int xino_write(struct super_block *sb, aufs_bindex_t bindex, ino_t h_ino,
-	       ino_t ino);
+	       struct xino *xino);
 int xino_read(struct super_block *sb, aufs_bindex_t bindex, ino_t h_ino,
-	      ino_t *ino, int force);
+	      struct xino *xino);
 int xino_init(struct super_block *sb, aufs_bindex_t bindex,
 	      struct file *base_file, int do_test);
 struct opt_xino;
@@ -194,28 +216,35 @@ static inline int au_is_remote(struct super_block *sb)
 }
 
 #ifdef CONFIG_AUFS_EXPORT
-static inline void init_export_op(struct super_block *sb)
+static inline void au_init_export_op(struct super_block *sb)
 {
 	extern struct export_operations aufs_export_op;
 	sb->s_export_op = &aufs_export_op;
 }
-static inline void nfsd_lockdep_off(void)
+
+static inline int au_is_nfsd(struct task_struct *tsk)
 {
-	if (!strcmp(current->comm, "nfsd"))
+	return (!tsk->mm && !strcmp(tsk->comm, "nfsd"));
+}
+
+static inline void au_nfsd_lockdep_off(void)
+{
+	if (au_is_nfsd(current))
 		lockdep_off();
 }
-static inline void nfsd_lockdep_on(void)
+
+static inline void au_nfsd_lockdep_on(void)
 {
-	if (!strcmp(current->comm, "nfsd"))
+	if (au_is_nfsd(current))
 		lockdep_on();
 }
 #else
-static inline void init_export_op(struct super_block *sb)
+static inline void au_init_export_op(struct super_block *sb)
 {
 	/* nothing */
 }
-#define nfsd_lockdep_off()	/* */
-#define nfsd_lockdep_on()	/* */
+#define au_nfsd_lockdep_off()	/* */
+#define au_nfsd_lockdep_on()	/* */
 #endif
 
 static inline void init_lvma(struct aufs_sbinfo *sbinfo)
@@ -270,20 +299,9 @@ static inline unsigned int au_flag_test_coo(struct super_block *sb)
 /* lock superblock. mainly for entry point functions */
 SimpleRwsemFuncs(si, struct super_block *sb, stosi(sb)->si_rwsem);
 
-static inline void SiMustReadLock(struct super_block *sb)
-{
-	RwMustReadLock(&stosi(sb)->si_rwsem);
-}
-
-static inline void SiMustWriteLock(struct super_block *sb)
-{
-	RwMustWriteLock(&stosi(sb)->si_rwsem);
-}
-
-static inline void SiMustAnyLock(struct super_block *sb)
-{
-	RwMustAnyLock(&stosi(sb)->si_rwsem);
-}
+#define SiMustReadLock(sb)	RwMustReadLock(&stosi(sb)->si_rwsem)
+#define SiMustWriteLock(sb)	RwMustWriteLock(&stosi(sb)->si_rwsem)
+#define SiMustAnyLock(sb)	RwMustAnyLock(&stosi(sb)->si_rwsem)
 
 #endif /* __KERNEL__ */
 #endif /* __AUFS_SUPER_H__ */

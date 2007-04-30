@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: module.h,v 1.6 2007/04/23 00:57:34 sfjro Exp $ */
+/* $Id: module.h,v 1.7 2007/04/30 05:43:57 sfjro Exp $ */
 
 #ifndef __AUFS_MODULE_H__
 #define __AUFS_MODULE_H__
@@ -51,30 +51,6 @@ CacheFuncs(dehstr, AuCache_DEHSTR);
 CacheFuncs(hinotify, AuCache_HINOTIFY);
 
 #undef CacheFuncs
-
-//sysaufs.c
-#ifdef CONFIG_AUFS_SYSAUFS
-struct aufs_sbinfo;
-void add_sbilist(struct aufs_sbinfo *sbinfo);
-void del_sbilist(struct aufs_sbinfo *sbinfo);
-int __init sysaufs_init(void);
-void sysaufs_fin(void);
-void sysaufs_notify_remount(void);
-#else
-static inline void add_sbilist(struct aufs_sbinfo *sbinfo)
-{
-	/* nothing */
-}
-
-static inline void del_sbilist(struct aufs_sbinfo *sbinfo)
-{
-	/* nothing */
-}
-
-#define sysaufs_init()		0
-#define sysaufs_fin()		/* */
-#define sysaufs_notify_remount()	/* */
-#endif
 
 #endif /* __KERNEL__ */
 #endif /* __AUFS_MODULE_H__ */

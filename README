@@ -2,7 +2,7 @@
 Aufs -- Another Unionfs
 Junjiro Okajima
 
-# $Id: README,v 1.45 2007/04/23 00:59:50 sfjro Exp $
+# $Id: README,v 1.46 2007/04/30 05:48:24 sfjro Exp $
 
 
 0. Introduction
@@ -61,6 +61,7 @@ Aufs is in still development stage, especially,,,
   including NFS or remote filesystem branch.
 
 (current work)
+- refine xino and revalidate
 - lockdep
 - a delegation of the internal branch access to support task I/O
   accounting, which also supports Linux Security Modules (LSM) mainly
@@ -75,7 +76,7 @@ Aufs is in still development stage, especially,,,
 - O_DIRECT (unnecessary?)
 - light version, without branch manipulation. (unnecessary?)
 - SMP, because I don't have such machine. But several users reported
-  aufs is working fine.
+  aufs is working fine on SMP machines.
 - 64bit environment, because I don't have such machine.
 - copyup in userspace
 - xattr, acl
@@ -94,7 +95,7 @@ refer to the document about CVS on SourceForge.
 	(CVS password is empty)
 	$ cvs -z3 -d:pserver:anonymous@aufs.cvs.sourceforge.net:/cvsroot/aufs co aufs
 
-In order to update files after first checkout.
+In order to update files after the first checkout.
 	$ cd aufs.wcvs/aufs
 	$ cvs update
 

@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* $Id: file.h,v 1.23 2007/04/16 01:14:58 sfjro Exp $ */
+/* $Id: file.h,v 1.24 2007/04/30 05:45:31 sfjro Exp $ */
 
 #ifndef __AUFS_FILE_H__
 #define __AUFS_FILE_H__
@@ -89,6 +89,7 @@ struct file *au_h_fptr(struct file *file);
 void set_fbstart(struct file *file, aufs_bindex_t bindex);
 void set_fbend(struct file *file, aufs_bindex_t bindex);
 void set_fvdir_cache(struct file *file, struct aufs_vdir *vdir_cache);
+void au_hfput(struct aufs_hfile *hf);
 void set_h_fptr(struct file *file, aufs_bindex_t bindex, struct file *h_file);
 void au_update_figen(struct file *file);
 
@@ -111,28 +112,22 @@ static inline int au_is_mmapped(struct file *f)
 
 SimpleRwsemFuncs(fi, struct file *f, ftofi(f)->fi_rwsem);
 
-static inline void FiMustReadLock(struct file *f)
-{
-	SiMustAnyLock(f->f_dentry->d_sb);
-	RwMustReadLock(&ftofi(f)->fi_rwsem);
-}
+#define FiMustReadLock(f) do {\
+	SiMustAnyLock((f)->f_dentry->d_sb); \
+	RwMustReadLock(&ftofi(f)->fi_rwsem); \
+} while (0)
 
-static inline void FiMustWriteLock(struct file *f)
-{
-	SiMustAnyLock(f->f_dentry->d_sb);
-	RwMustWriteLock(&ftofi(f)->fi_rwsem);
-}
+#define FiMustWriteLock(f) do { \
+	SiMustAnyLock((f)->f_dentry->d_sb); \
+	RwMustWriteLock(&ftofi(f)->fi_rwsem); \
+} while (0)
 
-static inline void FiMustAnyLock(struct file *f)
-{
-	SiMustAnyLock(f->f_dentry->d_sb);
-	RwMustAnyLock(&ftofi(f)->fi_rwsem);
-}
+#define FiMustAnyLock(f) do { \
+	SiMustAnyLock((f)->f_dentry->d_sb); \
+	RwMustAnyLock(&ftofi(f)->fi_rwsem); \
+} while (0)
 
-static inline void FiMustNoWaiters(struct file *f)
-{
-	RwMustNoWaiters(&ftofi(f)->fi_rwsem);
-}
+#define FiMustNoWaiters(f)	RwMustNoWaiters(&ftofi(f)->fi_rwsem)
 
 #endif /* __KERNEL__ */
 #endif /* __AUFS_FILE_H__ */
