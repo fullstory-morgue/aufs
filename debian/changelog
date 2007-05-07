@@ -1,6 +1,8 @@
-aufs (0.0~20070501-2) UNRELEASED; urgency=low
+aufs (0.0~20070501-2) ORPHANED; urgency=low
 
   * NOT RELEASED YET
+  * ORPHAN PACKAGE
+  * The package is now provided by debian proper (Closes: #419368).
 
  -- Stefan Lippers-Hollmann <s.l-h@gmx.de>  Tue, 01 May 2007 01:51:09 +0200
 
